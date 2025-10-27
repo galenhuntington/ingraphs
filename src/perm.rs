@@ -32,7 +32,7 @@ impl Perm {
         use super::testers::*;
         PermDistr(size).sample(rng)
     }
-    pub fn is_valid(self: &Self) -> bool {
+    pub fn is_valid(&self) -> bool {
         let mut set = BTreeSet::new();
         for it in &self.vec {
             if *it >= self.size() || set.contains(it) { return false }
@@ -57,7 +57,7 @@ impl FromIterator<usize> for Perm {
 }
 
 pub fn all_perms<'a>(size: usize) -> impl Iterator<Item=Perm> + 'a {
-    (0..size).permutations(size).map(|v| Perm::new_unsafe(v))
+    (0..size).permutations(size).map(Perm::new_unsafe)
 }
 
 impl_op_ex!(* |a: &Perm, b: &Perm| -> Perm {

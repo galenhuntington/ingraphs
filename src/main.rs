@@ -8,7 +8,6 @@ pub mod progress;
 
 use base::{Graph, BitNum,Bits};
 use std::collections::BTreeSet;
-use clap;
 use clap::{Parser,Subcommand};
 
 pub fn enumerate(size: usize, range: Option<(usize, usize)>) {
@@ -136,12 +135,7 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
 
 fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph>) -> Option<Graph> {
     let sub_sorted = tools::build_sorted_row(sub);
-    for sup in list {
-        if !tools::ingraph_check(&sup, &sub_sorted, sub) {
-            return Some(sup);
-        }
-    }
-    None
+    list.into_iter().find(|sup| !tools::ingraph_check(sup, &sub_sorted, sub))
 }
 
 // Counts: modulo complements and symmetries, modulo symmetries, "labelled"
@@ -153,7 +147,7 @@ fn miss_counts(gr: &Graph) -> (usize, usize, usize) {
     };
     let fac = tools::factorial(gr.size);
     let mut counts = (0, 0, 0);
-    for gr1 in tools::noncovers(all.iter().cloned(), &gr) {
+    for gr1 in tools::noncovers(all.iter().cloned(), gr) {
         let gr1 = Graph::from_bits(gr.size, gr1);
         let syms = fac / tools::count_symmetries(&gr1);
         // eprintln!("{} {}", gr1, syms);
@@ -189,7 +183,7 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: BitNum) {
                 bads.push(g1);
             }
         }
-        if bads.len() > 0 { continue }
+        if !bads.is_empty() { continue }
         print!("{},{},{:?},", g.bits(), Graph::from_bits(size, g), bads);
         show_iter(highs.iter().cloned());
     }
@@ -342,7 +336,7 @@ fn parse_subgraph_args(strs: Vec<String>) -> Option<(Vec<BitNum>, Vec<BitNum>)> 
         }
         target.push(s.parse().ok()?);
     }
-    if subs.len() == 0 || sups.len() == 0 {
+    if subs.is_empty() || sups.is_empty() {
         None
     } else {
         Some((subs, sups))

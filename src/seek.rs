@@ -69,15 +69,15 @@ pub fn seek(gr: &Graph, bailout: usize) -> (Option<Graph>, usize) {
         eprintln!("seek: {} / {} {}", grm, grm.show_bits(), tools::count_symmetries(&grm));
     }
     */
-    let rets = tools::bump(&gr, false);
+    let rets = tools::bump(gr, false);
     // let rets: Vec<_> = rets.iter().cloned().rev().collect();
     let res = rets.par_iter().find_map_any(|grm| {
         let grm = Graph::from_bits(gr.size, *grm);
         // eprintln!("seek: {:?} / {}", grm, tools::count_symmetries(&grm));
         recurse(&mut Fixed {
-                gr: &gr,
+                gr,
                 seen,
-                row: &tools::build_sorted_row(&gr),
+                row: &tools::build_sorted_row(gr),
                 bailout,
                 rng: thread_rng(),
                 // top_size: (Graph::triangle(gr.size) as u32 + 1) / 2,

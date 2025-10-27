@@ -103,8 +103,8 @@ trait RVal: Sized + Copy {
 impl RVal for bool {
     type Score = ();
     const FAIL_FAST: bool = true;
-    fn score(_bn: BitNum) -> () {}
-    fn pick_best(_v: Self, _sc: Self::Score) -> () {}
+    fn score(_bn: BitNum) {}
+    fn pick_best(_v: Self, _sc: Self::Score) {}
     fn val(_sc: ()) -> bool { true }
     fn fail() -> bool { false }
     fn fail_fast_on(v: Self) -> bool { !v }

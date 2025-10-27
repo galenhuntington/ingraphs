@@ -23,7 +23,7 @@ pub fn one_bits(ct: usize) -> BitNum { (1 << ct) - 1 }
 pub fn timestamp() -> String {
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
     let ts = UTCDatetime::from(now);
-    format!("{}", ts.as_iso_datetime(6))
+    ts.as_iso_datetime(6).to_string()
 }
 
 pub fn degree_row(gr: &Graph) -> Vec<usize> {
@@ -105,7 +105,7 @@ pub fn count_symmetries(gr: &Graph) -> usize {
             }
         }).sum()
     }
-    go(&gr, &degs, 1, &Perm::identity(gr.size))
+    go(gr, &degs, 1, &Perm::identity(gr.size))
         * factorial(degs[0].len()) * factorial(degs[gr.size - 1].len())
 }
 
@@ -126,7 +126,7 @@ impl IIResult for Option<Perm> {
     fn failure() -> Self { None }
 }
 
-pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &Vec<(usize, usize)>, sup: &Graph) -> T {
+pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> T {
     let size = sub.size;
     let sup_row = degree_row(sup);
     let mut perm = Perm::new_unsafe(vec![UNFILLED; size]);
@@ -164,9 +164,9 @@ pub fn build_sorted_row(gr: &Graph) -> Vec<(usize, usize)> {
     row
 }
 
-pub fn ingraph_check(sup: &Graph, sub_sorted: &Vec<(usize, usize)>, sub: &Graph) -> bool {
+pub fn ingraph_check(sup: &Graph, sub_sorted: &[(usize, usize)], sub: &Graph) -> bool {
     let isup = sup.complement();
-    return isso_inner(sub, sub_sorted, &isup) || isso_inner(sub, sub_sorted, sup);
+    isso_inner(sub, sub_sorted, &isup) || isso_inner(sub, sub_sorted, sup)
 }
 
 pub fn noncovers<B: Bits + Copy, V: Iterator<Item=B>>(sups: V, sub: &Graph)
@@ -180,10 +180,10 @@ pub fn noncovers<B: Bits + Copy, V: Iterator<Item=B>>(sups: V, sub: &Graph)
 
 pub fn is_subgraph_of(sub: &Graph, sup: &Graph) -> bool {
     let sub_sorted = build_sorted_row(sub);
-    return isso_inner(sub, &sub_sorted, sup);
+    isso_inner(sub, &sub_sorted, sup)
 }
 
-pub fn find_subgraph_ss(sub: &Graph, sub_sorted: &Vec<(usize, usize)>, sup: &Graph) -> Option<Graph> {
+pub fn find_subgraph_ss(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> Option<Graph> {
     isso_inner::<Option<Perm>>(sub, sub_sorted, sup).map(|p| sub.unrenumber(&p))
 }
 
