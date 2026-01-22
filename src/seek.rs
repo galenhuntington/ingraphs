@@ -1,18 +1,19 @@
 use crate::base::{Graph,Bits,BitNum};
 use crate::tools;
 use crate::enumerate;
+use dashmap::DashSet;
 use rayon::prelude::*;
-use std::collections::BTreeSet;
-use std::sync::Mutex;
 use rand::Rng;
 use rand::thread_rng;
+use std::sync::atomic::{AtomicBool,Ordering};
 
 struct Fixed<'a> {
     gr: &'a Graph,
-    seen: &'a Mutex<BTreeSet<BitNum>>,
+    seen: &'a DashSet<BitNum>,
     row: &'a Vec<(usize, usize)>,
-    bailout: usize,
+    limit: usize,
     rng: rand::rngs::ThreadRng,
+    quit: &'a AtomicBool,
     // Size limitations only seem to slow things down.
     // top_size: u32,
     // bit_mask: BitNum,
@@ -38,20 +39,18 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
                 if tools::isso_inner(fixed.gr, fixed.row, &grnext) { continue }
                 // eprintln!("2 {}: {} -> {}; {}", b, grtw, grnext, fixed.gr);
                 let grnext = enumerate::to_best(&grnext);
-                {
-                    let mut seen = fixed.seen.lock().unwrap();
-                    if seen.contains(&0) { return None }
-                    if !seen.insert(grnext.bits()) { continue }
-                    if seen.len() >= fixed.bailout { return None }
-                    if seen.len() % 100_000 == 0 {
-                        eprint!("\n Checked {}\r", seen.len());
-                    }
+                let seen = fixed.seen;
+                if fixed.quit.load(Ordering::Relaxed) { return None }
+                if !seen.insert(grnext.bits()) { continue }
+                if seen.len() >= fixed.limit { return None }
+                if seen.len() % 100_000 == 0 {
+                    eprint!("\n Checked {}\r", seen.len());
                 }
                 let ans = recurse(fixed, grnext);
                 if ans.is_some() {
                     // find_map_any doesn't actually stop other threads, so
-                    // use 0 as signal that result is found.
-                    fixed.seen.lock().unwrap().insert(0);
+                    // we have to signal others to quit
+                    fixed.quit.store(true, Ordering::Relaxed);
                     return ans;
                 }
             }
@@ -61,8 +60,8 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
     }
 }
 
-pub fn seek(gr: &Graph, bailout: usize) -> (Option<Graph>, usize) {
-    let seen = &Mutex::new(BTreeSet::new());
+pub fn seek(gr: &Graph, limit: usize) -> (Option<Graph>, usize) {
+    let seen = &DashSet::new();
     /*
     for grm in tools::bump(&gr, false) {
         let grm = Graph::from_bits(gr.size, grm);
@@ -78,15 +77,15 @@ pub fn seek(gr: &Graph, bailout: usize) -> (Option<Graph>, usize) {
                 gr,
                 seen,
                 row: &tools::build_sorted_row(gr),
-                bailout,
+                limit,
                 rng: thread_rng(),
+                quit: &AtomicBool::new(false),
                 // top_size: (Graph::triangle(gr.size) as u32 + 1) / 2,
                 // bit_mask: (1 << Graph::triangle(gr.size)) - 1,
             },
             grm,
         )
     });
-    let seen = seen.lock().unwrap();
     (res, seen.len())
 }
 

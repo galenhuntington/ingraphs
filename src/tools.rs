@@ -112,17 +112,17 @@ pub fn count_symmetries(gr: &Graph) -> usize {
 const UNFILLED: usize = 0xfffff;
 
 pub trait IIResult {
-    fn from_perm(perm: &Perm) -> Self;
+    fn from_perm(perm: Perm) -> Self;
     fn failure() -> Self;
 }
 
 impl IIResult for bool {
-    fn from_perm(_perm: &Perm) -> bool { true }
+    fn from_perm(_perm: Perm) -> bool { true }
     fn failure() -> bool { false }
 }
 
 impl IIResult for Option<Perm> {
-    fn from_perm(perm: &Perm) -> Self { Some(perm.clone()) }
+    fn from_perm(perm: Perm) -> Self { Some(perm) }
     fn failure() -> Self { None }
 }
 
@@ -151,7 +151,7 @@ pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: 
         }
         false
     });
-    if go(&mut perm, 0) { T::from_perm(&perm) } else { T::failure() }
+    if go(&mut perm, 0) { T::from_perm(perm) } else { T::failure() }
 }
 
 pub fn build_sorted_row(gr: &Graph) -> Vec<(usize, usize)> {

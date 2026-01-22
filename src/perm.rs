@@ -1,6 +1,5 @@
 use rand::Rng;
 use itertools::Itertools;
-use std::collections::BTreeSet;
 use auto_ops::impl_op_ex;
 
 
@@ -33,10 +32,11 @@ impl Perm {
         PermDistr(size).sample(rng)
     }
     pub fn is_valid(&self) -> bool {
-        let mut set = BTreeSet::new();
+        let mut set = 0;
         for it in &self.vec {
-            if *it >= self.size() || set.contains(it) { return false }
-            set.insert(it);
+            let bit = 1 << it;
+            if *it >= self.size() || set & bit != 0 { return false }
+            set |= bit;
         }
         true
     }

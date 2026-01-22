@@ -3,7 +3,6 @@
 */
 
 use crate::perm::*;
-use core::ops::Index;
 use std::fmt;
 
 type Pair = (usize, usize);
@@ -38,18 +37,14 @@ impl Bits for BitNum {
     fn from_bits(_size: usize, bits: BitNum) -> Self { bits }
 }
 
-impl Index<usize> for BitVec {
-    type Output = bool;
-    fn index(&self, i: usize) -> &bool {
-        // assert!(i < 64, "Index out of bounds");
-        if self.0 & (1 << i) != 0 { &true } else { &false }
-    }
-}
-
 impl BitVec {
+    #[inline]
     pub fn new() -> Self { BitVec(0) }
+    #[inline]
     pub fn set(&mut self, i: usize) { self.0 |= 1 << i }
+    #[inline]
     pub fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
+    #[inline]
     pub fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
 }
 
@@ -66,15 +61,14 @@ pub struct Triangle (pub BitVec);
 pub struct Graph { pub size: usize, pub edges: Triangle }
 
 impl Triangle {
+    #[inline]
     pub fn empty(_sz: usize) -> Self { Triangle(BitVec(0)) }
+    #[inline]
     pub fn get(&self, (a, b): Pair) -> bool { self.0.get(index(a, b)) }
+    #[inline]
     pub fn set(&mut self, (a, b): Pair) { self.0.set(index(a, b)) }
+    #[inline]
     pub fn unset(&mut self, (a, b): Pair) { self.0.unset(index(a, b)) }
-}
-
-impl Index<Pair> for Triangle {
-    type Output = bool;
-    fn index(&self, (a, b): Pair) -> &bool { &self.0[index(a, b)] }
 }
 
 impl Bits for Triangle {
@@ -138,14 +132,16 @@ impl Graph {
         // assert_eq!(edges.0.len(), Graph::triangle(size), "Invalid graph size!");
         Graph { size, edges }
     }
+    #[inline]
     pub fn has_edge(&self, a: usize, b: usize) -> bool {
-        a != b && self.edges[(a, b)]
+        a != b && self.edges.get((a, b))
     }
     // assume a < b
+    #[inline]
     pub fn has_edge_raw(&self, a: usize, b: usize) -> bool {
-        self.edges[(a, b)]
+        self.edges.get((a, b))
     }
-    pub fn triangle(sz: usize) -> usize { sz*(sz-1)/2 }
+    pub const fn triangle(sz: usize) -> usize { sz*(sz-1)/2 }
     pub fn from_fn(size: usize, f: impl Fn(usize, usize) -> bool) -> Self {
         let mut edges = Triangle(BitVec(0));
         for b in 1..size { for a in 0..b {
