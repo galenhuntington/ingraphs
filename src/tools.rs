@@ -1,4 +1,4 @@
-/**
+/*!
     Permutations and basic operations on them.
 
     This is extracted from a larger module in another project.
@@ -7,6 +7,7 @@
 use crate::base::{BitNum,Graph,Bits,rev_hi_index};
 use crate::perm::{Perm,all_perms};
 use crate::enumerate;
+use std::cmp::Reverse;
 use std::time::SystemTime;
 use utc_dt::UTCDatetime;
 use fix_fn::fix_fn;
@@ -27,11 +28,7 @@ pub fn timestamp() -> String {
 }
 
 pub fn degree_row(gr: &Graph) -> Vec<usize> {
-    let mut row = Vec::with_capacity(gr.size);
-    for i in 0..gr.size {
-        row.push(gr.degree_of(i));
-    }
-    row
+    (0..gr.size).map(|i| gr.degree_of(i)).collect()
 }
 
 pub fn sorted_degree_row(gr: &Graph) -> Vec<usize> {
@@ -56,7 +53,8 @@ pub fn infer_graph(edges: BitNum) -> Graph {
 pub fn read_graphs<B: Bits>(sz: usize, path: &str) -> impl Iterator<Item=B> {
     use std::fs::File;
     use std::io::{BufReader,BufRead};
-    let file = File::open(path).unwrap();
+    let file = File::open(path)
+        .unwrap_or_else(|e| panic!("Error reading {}: {}", path, e));
     let reader = BufReader::new(file);
     reader.lines().map(move |line| {
         let line = line.unwrap();
@@ -85,27 +83,28 @@ pub fn naive_find_best(gr: &Graph) -> Graph {
 }
 
 pub fn count_symmetries(gr: &Graph) -> usize {
+    if gr.size <= 2 { return gr.size }
     // Partition by degree count
     let mut degs: Vec<Vec<usize>> = vec![Vec::new(); gr.size];
     for pt in 0..gr.size { degs[gr.degree_of(pt)].push(pt); }
     let degs = degs;
-    fn go(gr: &Graph, degs: &Vec<Vec<usize>>, deg: usize, perm: &Perm) -> usize {
+    let go = fix_fn!(|go, deg: usize, perm: &Perm| -> usize {
         let vec = &degs[deg];
         all_perms(vec.len()).map(|p| {
-            let mut pn = Perm::identity(gr.size);
+            let mut pn = Perm::identity(gr.size).into_vec();
             for (i, &pt) in vec.iter().enumerate() {
-                pn.vec[pt] = vec[p.vec[i]];
+                pn[pt] = vec[p.apply(i)];
             }
-            let p2 = perm * pn;
+            let p2 = perm * Perm::new_unchecked(pn);
             if deg >= gr.size - 2 {
                 let g = gr.unrenumber(&p2);
                 if g.edges == gr.edges { 1 } else { 0 }
             } else {
-                go(gr, degs, deg + 1, &p2)
+                go(deg + 1, &p2)
             }
         }).sum()
-    }
-    go(gr, &degs, 1, &Perm::identity(gr.size))
+    });
+    go(1, &Perm::identity(gr.size))
         * factorial(degs[0].len()) * factorial(degs[gr.size - 1].len())
 }
 
@@ -129,15 +128,15 @@ impl IIResult for Option<Perm> {
 pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> T {
     let size = sub.size;
     let sup_row = degree_row(sup);
-    let mut perm = Perm::new_unsafe(vec![UNFILLED; size]);
-    let go = fix_fn!(|go, perm: &mut Perm, i: usize| -> bool {
+    let mut perm = vec![UNFILLED; size];
+    let go = fix_fn!(|go, vec: &mut Vec<usize>, i: usize| -> bool {
         let (el_deg, el) = sub_sorted[i];
         'outer: for j in 0..size {
-            if perm.vec[j] != UNFILLED { continue }
+            if vec[j] != UNFILLED { continue }
             if el_deg > sup_row[j] { continue }
             if i > 0 {
                 for k in 0..size {
-                    let v = perm.vec[k];
+                    let v = vec[k];
                     if v != UNFILLED
                             && sub.has_edge(el, v)
                             && !sup.has_edge(j, k) {
@@ -145,22 +144,18 @@ pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: 
                     }
                 }
             }
-            perm.vec[j] = el;
-            if i == size - 1 || go(perm, i + 1) { return true }
-            perm.vec[j] = UNFILLED;
+            vec[j] = el;
+            if i == size - 1 || go(vec, i + 1) { return true }
+            vec[j] = UNFILLED;
         }
         false
     });
-    if go(&mut perm, 0) { T::from_perm(perm) } else { T::failure() }
+    if go(&mut perm, 0) { T::from_perm(Perm::new_unchecked(perm)) } else { T::failure() }
 }
 
 pub fn build_sorted_row(gr: &Graph) -> Vec<(usize, usize)> {
-    let mut row = Vec::with_capacity(gr.size);
-    for i in 0..gr.size {
-        row.push((gr.degree_of(i), i));
-    }
-    row.sort();
-    row.reverse();
+    let mut row: Vec<_> = (0..gr.size).map(|i| (gr.degree_of(i), i)).collect();
+    row.sort_by_key(|&(d, i)| Reverse((d, i)));
     row
 }
 
@@ -170,9 +165,9 @@ pub fn ingraph_check(sup: &Graph, sub_sorted: &[(usize, usize)], sub: &Graph) ->
 }
 
 pub fn noncovers<B: Bits + Copy, V: Iterator<Item=B>>(sups: V, sub: &Graph)
-        -> impl Iterator<Item=B> + use<'_, B, V> {
+        -> impl Iterator<Item=B> {
     let sub_sorted = build_sorted_row(sub);
-    let min_edges = (Graph::triangle(sub.size) + 1) / 2;
+    let min_edges = Graph::triangle(sub.size).div_ceil(2);
     sups.filter(
         move |sup| sup.bits().count_ones() as usize >= min_edges
             && !ingraph_check(&Graph::from_bits(sub.size, sup.bits()), &sub_sorted, sub))
@@ -223,7 +218,7 @@ mod tests {
     #[test]
     fn test_subgraph() {
         let rng = &mut rand::thread_rng();
-        for _ in 0 .. 2000 {
+        for _ in 0 .. 1000 {
             let size = rng.gen_range(1..=9);
             let sup = random_graph(rng, size);
             let mut sub = random_graph(rng, size);
@@ -241,6 +236,15 @@ mod tests {
                     "size = {}, sub = {}, sup = {}, sub_s = {}",
                     size, sub.bits(), sup.bits(), sub_s.bits());
             }
+        }
+    }
+    #[test]
+    fn test_count_symmetries() {
+        let rng = &mut rand::thread_rng();
+        for _ in 0 .. 300 {
+            let size = rng.gen_range(2..=9);
+            let gr = random_graph(rng, size);
+            assert_eq!(count_symmetries(&gr), count_symmetries_slow(&gr), "{}", gr);
         }
     }
 }

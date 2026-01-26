@@ -1,4 +1,4 @@
-/**
+/*!
     Representation of an undirected graph.
 */
 
@@ -38,15 +38,13 @@ impl Bits for BitNum {
 }
 
 impl BitVec {
-    #[inline]
-    pub fn new() -> Self { BitVec(0) }
-    #[inline]
-    pub fn set(&mut self, i: usize) { self.0 |= 1 << i }
-    #[inline]
-    pub fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
-    #[inline]
-    pub fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
+    #[inline] pub fn new() -> Self { BitVec(0) }
+    #[inline] pub fn set(&mut self, i: usize) { self.0 |= 1 << i }
+    #[inline] pub fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
+    #[inline] pub fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
 }
+
+impl Default for BitVec { fn default() -> Self { Self::new() } }
 
 impl Bits for BitVec {
     fn bits(&self) -> BitNum { self.0 }
@@ -57,7 +55,7 @@ impl Bits for BitVec {
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Ord, PartialOrd)]
 pub struct Triangle (pub BitVec);
 
-#[derive(Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 pub struct Graph { pub size: usize, pub edges: Triangle }
 
 impl Triangle {
@@ -76,30 +74,17 @@ impl Bits for Triangle {
     fn from_bits(_size: usize, bits: BitNum) -> Self { Triangle(BitVec(bits)) }
 }
 
-/*
-impl IntoIterator for Triangle {
-    type Item = bool;
-    type IntoIter = std::vec::IntoIter<bool>;
-    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
-}
-*/
+#[inline]
+pub const fn raw_index(a: usize, b: usize) -> usize { b*(b-1) / 2 + a }
 
 #[inline]
-pub fn raw_index(a: usize, b: usize) -> usize { b*(b-1) / 2 + a }
-
-/*
-#[inline]
-fn mn(x: usize, y: usize) -> Pair { if x < y { (x, y) } else { (y, x) } }
-*/
-
-#[inline]
-pub fn index(a: usize, b: usize) -> usize {
+pub const fn index(a: usize, b: usize) -> usize {
     if a < b { raw_index(a, b) } else { raw_index(b, a) }
 }
 
 #[inline]
 pub fn rev_hi_index(i: usize) -> usize {
-    (((8*i + 1) as f64).sqrt() as usize + 1) / 2
+    (((8*i + 1) as f64).sqrt() as usize).div_ceil(2)
 }
 
 pub fn rev_index(i: usize) -> Pair {
@@ -187,7 +172,7 @@ impl fmt::Display for Graph {
                 .filter(move |a| self.has_edge(*a, b))
                 .map(move |a| format!("{}–{}", a, b)))
             .collect::<Vec<_>>();
-        write!(f, "[{}]", v.as_slice().join(" "))
+        write!(f, "{}:[{}]", self.size, v.as_slice().join(" "))
     }
 }
 
@@ -220,19 +205,17 @@ mod tests {
         for _ in 1..80_000 {
             let len = rng.gen_range(2..11);
             let p = Perm::random(rng, len);
-            if p.is_valid() {
-                // XXX lopsided distro
-                let b = rng.gen_range(1..len);
-                let a = rng.gen_range(0..b);
-                let pa = p.apply(a);
-                let pb = p.apply(b);
-                let (pa1, pb1) = if pa < pb { (pa, pb) } else { (pb, pa) };
-                let gr = Graph::from_fn(len, |x, y| x==a && y==b);
-                let gr2 = Graph::from_fn(len, |x, y| x==pa1 && y==pb1);
-                assert_eq!(&gr.renumber(&p), &gr2);
-                assert_eq!(gr.edge_count(), 1);
-                assert_eq!(gr2.edge_count(), 1);
-            }
+            // XXX lopsided distro
+            let b = rng.gen_range(1..len);
+            let a = rng.gen_range(0..b);
+            let pa = p.apply(a);
+            let pb = p.apply(b);
+            let (pa1, pb1) = if pa < pb { (pa, pb) } else { (pb, pa) };
+            let gr = Graph::from_fn(len, |x, y| x==a && y==b);
+            let gr2 = Graph::from_fn(len, |x, y| x==pa1 && y==pb1);
+            assert_eq!(&gr.renumber(&p), &gr2);
+            assert_eq!(gr.edge_count(), 1);
+            assert_eq!(gr2.edge_count(), 1);
         }
     }
     #[test]

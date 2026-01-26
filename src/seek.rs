@@ -43,7 +43,7 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
                 if fixed.quit.load(Ordering::Relaxed) { return None }
                 if !seen.insert(grnext.bits()) { continue }
                 if seen.len() >= fixed.limit { return None }
-                if seen.len() % 100_000 == 0 {
+                if seen.len().is_multiple_of(100_000) {
                     eprint!("\n Checked {}\r", seen.len());
                 }
                 let ans = recurse(fixed, grnext);

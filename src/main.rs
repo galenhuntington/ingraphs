@@ -86,7 +86,7 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
         544909132271975424,
         541524869842467840,
         */
-    ].iter().map(|ce| (0, *ce)).collect();
+    ].into_iter().map(|ce| (0, ce)).collect();
     for (i, gr) in pool.enumerate() {
         let val = gr.bits();
         let ec = val.count_ones();
@@ -113,7 +113,7 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
             chkce.map_or_else(
                 || {
                     let seek = crate::seek::seek(&gr, bailout);
-                    if let Some(gr1) = seek.0.clone() {
+                    if let Some(gr1) = seek.0 {
                         counterexamples.insert((i, gr1.bits()));
                         // counterexamples.insert((ce_score(&gr1), gr1.bits()));
                     }
@@ -151,7 +151,7 @@ fn miss_counts(gr: &Graph) -> (usize, usize, usize) {
         let gr1 = Graph::from_bits(gr.size, gr1);
         let syms = fac / tools::count_symmetries(&gr1);
         // eprintln!("{} {}", gr1, syms);
-        if match half { Some(x) => x == gr1.edge_count(), _ => false } {
+        if matches!(half, Some(x) if x == gr1.edge_count()) {
             counts.0 +=
                 if tools::is_subgraph_of(&gr1, &gr1.complement()) { 2 } else { 1 };
             counts.1 += 1;
@@ -355,7 +355,7 @@ pub fn main() {
         C::EnumerateMiddle { size } => {
             let tri = Graph::triangle(size);
             let half = tri / 2;
-            if tri % 2 == 0 {
+            if tri.is_multiple_of(2) {
                 enumerate_middle(size);
             } else {
                 enumerate(size, Some((half, half)));
@@ -399,7 +399,7 @@ pub fn main() {
             println!("{:?} {} {:?} {:?}",
                 bits,
                 gr,
-                ans.clone().map(|x| x.bits()),
+                ans.map(|x| x.bits()),
                 ans.map(|x| format!("{}", x))
             );
         }

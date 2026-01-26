@@ -1,67 +1,70 @@
 use rand::Rng;
+use std::fmt;
 use itertools::Itertools;
 use auto_ops::impl_op_ex;
 
 
 #[derive(Debug,PartialEq,Eq,Clone,Hash,PartialOrd,Ord)]
-pub struct Perm { pub vec: Vec<usize> }
+pub struct Perm { vec: Vec<usize> }
+
+type PermError = ();
 
 impl Perm {
-    pub fn new(vec: Vec<usize>) -> Self {
-        let p = Perm { vec };
-        assert!(p.is_valid(), "Invalid permutation: {:?}", p);
-        p
+    pub fn new(vec: Vec<usize>) -> Option<Self> {
+        Self::is_valid_slice(&vec).then_some(Perm { vec })
     }
-    pub fn new_unsafe(vec: Vec<usize>) -> Self { Perm { vec } }
-    pub fn size(&self) -> usize { self.vec.len() }
-    pub fn identity(size: usize) -> Self { Perm::new_unsafe((0..size).collect()) }
-    // pub fn from_fn<F>(size: usize, f: impl Fn(usize) -> usize) -> Self {
-    pub fn from_fn(size: usize, f: impl Fn(usize) -> usize) -> Self {
-        (0..size).map(f).collect()
-    }
-    pub fn apply(&self, n: usize) -> usize { self.vec[n] }
+    #[inline] pub fn new_unchecked(vec: Vec<usize>) -> Self { Perm { vec } }
+    #[inline] pub fn vec(&self) -> &Vec<usize> { &self.vec }
+    #[inline] pub fn into_vec(self) -> Vec<usize> { self.vec }
+    #[inline] pub fn size(&self) -> usize { self.vec.len() }
+    pub fn identity(size: usize) -> Self { Perm::new_unchecked((0..size).collect()) }
+    #[inline] pub fn apply(&self, n: usize) -> usize { self.vec[n] }
     pub fn inverse(&self) -> Self {
-        let mut v = vec![0; self.vec.len()];
+        let mut v = vec![0; self.size()];
         for (i, n) in self.vec.iter().enumerate() {
             v[*n] = i;
         }
-        Perm::new_unsafe(v)
+        Perm::new_unchecked(v)
     }
     pub fn random<R>(rng: &mut R, size: usize) -> Self where R: Rng + ?Sized {
         use super::testers::*;
         PermDistr(size).sample(rng)
     }
-    pub fn is_valid(&self) -> bool {
+    fn is_valid_slice(vec: &[usize]) -> bool {
         let mut set = 0;
-        for it in &self.vec {
+        for it in vec {
             let bit = 1 << it;
-            if *it >= self.size() || set & bit != 0 { return false }
+            if *it >= vec.len() || set & bit != 0 { return false }
             set |= bit;
         }
         true
     }
 }
 
-impl<const N: usize> From<[usize; N]> for Perm {
-    fn from(arr: [usize; N]) -> Perm { Perm::new(Vec::from(arr)) }
+impl TryFrom<Vec<usize>> for Perm {
+    type Error = PermError;
+    fn try_from(vec: Vec<usize>) -> Result<Self, Self::Error> {
+        Perm::new(vec).ok_or(())
+    }
 }
 
-impl From<Vec<usize>> for Perm {
-    fn from(vec: Vec<usize>) -> Perm { Perm::new(vec) }
-}
-
-impl FromIterator<usize> for Perm {
-    fn from_iter<I: IntoIterator<Item=usize>>(iter: I) -> Self {
-        Perm::new(Vec::from_iter(iter))
+impl fmt::Display for Perm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[")?;
+        for (i, &v) in self.vec.iter().enumerate() {
+            if i > 0 { write!(f, " ")? }
+            write!(f, "{}", v)?;
+        }
+        write!(f, "]")
     }
 }
 
 pub fn all_perms<'a>(size: usize) -> impl Iterator<Item=Perm> + 'a {
-    (0..size).permutations(size).map(Perm::new_unsafe)
+    (0..size).permutations(size).map(Perm::new_unchecked)
 }
 
 impl_op_ex!(* |a: &Perm, b: &Perm| -> Perm {
     assert_eq!(a.size(), b.size(), "Composed perms must have same size.");
-    Perm::new_unsafe((0..a.size()).map(|i| a.vec[b.vec[i]]).collect())
+    Perm::new_unchecked((0..a.size()).map(|i| a.apply(b.apply(i))).collect())
 });
 

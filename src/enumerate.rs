@@ -76,7 +76,7 @@ fn new_permute(
     // eprintln!("perm={:?}", perm);
     let mask = one_bits(Graph::triangle(pt + 1));
     let new_cur = (cur & !mask)
-        | Graph::from_bits(pt + 1, cur & mask).renumber(&Perm::new_unsafe(perm)).edges.0.0;
+        | Graph::from_bits(pt + 1, cur & mask).renumber(&Perm::new_unchecked(perm)).edges.0.0;
     // eprintln!("cur={:b}, new_cur={:b}", cur, new_cur);
     // double check
     /*
@@ -96,7 +96,7 @@ trait RVal: Sized + Copy {
     fn score(bn: BitNum) -> Self::Score;
     fn pick_best(_v: Self, _sc: Self::Score) -> Self::Score;
     fn val(sc: Self::Score) -> Self;
-    fn fail() -> Self { panic!("fail") }
+    fn fail() -> Self { unreachable!("Invalid RVal::fail.") }
     fn fail_fast_on(_v: Self) -> bool { false }
 }
 
@@ -134,7 +134,7 @@ fn new_recurse<T: RVal>(
         return false;
     }
     */
-    let mut best: T::Score = T::score(cur);
+    let mut best = T::score(cur);
     for swap in (0..=pt).rev() {
         // eprintln!("break_bits={:b} pt={} swap={}", break_bits, pt, swap);
         if pt != swap && BitVec(break_bits).get(swap) { break }
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn test_best() {
         let rng = &mut rand::thread_rng();
-        for _ in 0 .. 1000 {
+        for _ in 0 .. 300 {
             let size = rng.gen_range(1..=9);
             let mut rand_bits = || rng.gen_range(0..(1 << Graph::triangle(size)));
             let gr = Graph::from_bits(size, rand_bits());

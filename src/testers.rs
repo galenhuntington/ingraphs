@@ -8,6 +8,6 @@ impl Distribution<Perm> for PermDistr {
         use rand::prelude::SliceRandom;
         let mut vec: Vec<usize> = (0..self.0).collect();
         vec.as_mut_slice().shuffle(rng);
-        Perm::new_unsafe(vec)
+        vec.try_into().unwrap()
     }
 }
