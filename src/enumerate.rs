@@ -4,7 +4,7 @@ use crate::tools::one_bits;
 use crate::perm::Perm;
 use std::cmp::Ordering::*;
 
-struct Fixed<'a, CB: Fn(base::BitNum)> {
+struct Fixed<'a, CB: FnMut(base::BitNum)> {
     pub size: usize,
     pub line: &'a mut Vec<BitNum>,
     pub callback: CB,
@@ -193,7 +193,7 @@ pub fn to_best(gr: &Graph) -> Graph {
 }
 
 fn recurse(
-    fixed: &mut Fixed<impl Fn(base::BitNum)>,
+    fixed: &mut Fixed<impl FnMut(base::BitNum)>,
     Recursed { at, break_bits, so_far, recheck }: Recursed,
 ) {
     let offset = base::Graph::triangle(at);
@@ -258,7 +258,7 @@ fn recurse(
     }
 }
 
-pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: impl Fn(base::BitNum)) {
+pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: impl FnMut(base::BitNum)) {
     if size == 0 { return }
     recurse(
         &mut Fixed {
@@ -276,7 +276,7 @@ pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: im
     );
 }
 
-pub fn enumerate_middle(size: usize, callback: fn(base::BitNum)) {
+pub fn enumerate_middle(size: usize, mut callback: impl FnMut(base::BitNum)) {
     let half = Graph::triangle(size) / 2;
     enumerate_graphs(size, Some((half, half)), move |bn| {
         let grc = Graph::from_bits(size, bn).complement();

@@ -11,11 +11,15 @@ use std::collections::BTreeSet;
 use clap::{Parser,Subcommand};
 
 pub fn enumerate(size: usize, range: Option<(usize, usize)>) {
-    enumerate::enumerate_graphs(size, range, |bits| println!("{}", bits));
+    use std::io::Write;
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    enumerate::enumerate_graphs(size, range, |bits| { writeln!(out, "{}", bits).unwrap() });
 }
 
 pub fn enumerate_middle(size: usize) {
-    enumerate::enumerate_middle(size, |bits| println!("{}", bits));
+    use std::io::Write;
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    enumerate::enumerate_middle(size, |bits| { writeln!(out, "{}", bits).unwrap() });
 }
 
 // Fixed filename for all graphs used for a few operations
@@ -133,9 +137,18 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
     }
 }
 
-fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph>) -> Option<Graph> {
+fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<Graph> {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     let sub_sorted = tools::build_sorted_row(sub);
-    list.into_iter().find(|sup| !tools::ingraph_check(sup, &sub_sorted, sub))
+    let done = AtomicU64::new(0);
+    list.par_bridge().find_map_any(|sup| {
+        let d = done.fetch_add(1, Ordering::Relaxed);
+        if d % 10_000_000 == 0 {
+            eprint!(" Progress: {} ({})\r", d, tools::timestamp());
+        }
+        (!tools::ingraph_check(&sup, &sub_sorted, sub)).then_some(sup)
+    })
 }
 
 // Counts: modulo complements and symmetries, modulo symmetries, "labelled"

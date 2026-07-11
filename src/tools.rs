@@ -126,32 +126,95 @@ impl IIResult for Option<Perm> {
     fn failure() -> Self { None }
 }
 
-pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> T {
-    let size = sub.size;
-    let sup_row = degree_row(sup);
-    let mut perm = vec![UNFILLED; size];
-    let go = fix_fn!(|go, vec: &mut Vec<usize>, i: usize| -> bool {
-        let (el_deg, el) = sub_sorted[i];
-        'outer: for j in 0..size {
-            if vec[j] != UNFILLED { continue }
-            if el_deg > sup_row[j] { continue }
-            if i > 0 {
-                for k in 0..size {
-                    let v = vec[k];
-                    if v != UNFILLED
-                            && sub.has_edge(el, v)
-                            && !sup.has_edge(j, k) {
-                        continue 'outer
-                    }
-                }
+// Neighbor masks, indexed by vertex
+fn adj_masks(gr: &Graph) -> [u32; 16] {
+    let mut adj = [0u32; 16];
+    let mut bits = gr.bits();
+    while bits != 0 {
+        let i = bits.trailing_zeros() as usize;
+        bits &= bits - 1;
+        let (a, b) = crate::base::rev_index(i);
+        adj[a] |= 1 << b;
+        adj[b] |= 1 << a;
+    }
+    adj
+}
+
+struct Isso<'a> {
+    sub_sorted: &'a [(usize, usize)],
+    sub_adj: [u32; 16],
+    sup_adj: [u32; 16],
+    sup_deg: [usize; 16],
+    // for each sub vertex, the sup slots its already-placed neighbors occupy
+    req: [u32; 16],
+    // sup slot -> sub vertex
+    vec: [usize; 16],
+    used: u32,
+    size: usize,
+}
+
+impl Isso<'_> {
+    fn go(&mut self, i: usize) -> bool {
+        let (el_deg, el) = self.sub_sorted[i];
+        if el_deg == 0 {
+            // the rest are isolated; drop them into free slots
+            let mut j = 0;
+            for k in i..self.size {
+                while self.used & (1 << j) != 0 { j += 1 }
+                self.vec[j] = self.sub_sorted[k].1;
+                self.used |= 1 << j;
             }
-            vec[j] = el;
-            if i == size - 1 || go(vec, i + 1) { return true }
-            vec[j] = UNFILLED;
+            return true;
+        }
+        let req_el = self.req[el];
+        for j in 0..self.size {
+            let jb = 1u32 << j;
+            if self.used & jb != 0 { continue }
+            if el_deg > self.sup_deg[j] { continue }
+            // every placed neighbor of el must sit on a sup neighbor of j
+            if req_el & !self.sup_adj[j] != 0 { continue }
+            self.vec[j] = el;
+            self.used |= jb;
+            let mut nbrs = self.sub_adj[el];
+            while nbrs != 0 {
+                let u = nbrs.trailing_zeros() as usize;
+                nbrs &= nbrs - 1;
+                self.req[u] |= jb;
+            }
+            if i == self.size - 1 || self.go(i + 1) { return true }
+            let mut nbrs = self.sub_adj[el];
+            while nbrs != 0 {
+                let u = nbrs.trailing_zeros() as usize;
+                nbrs &= nbrs - 1;
+                self.req[u] &= !jb;
+            }
+            self.used &= !jb;
+            self.vec[j] = UNFILLED;
         }
         false
-    });
-    if go(&mut perm, 0) { T::from_perm(Perm::new_unchecked(perm)) } else { T::failure() }
+    }
+}
+
+pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> T {
+    let size = sub.size;
+    let sup_adj = adj_masks(sup);
+    let mut sup_deg = [0; 16];
+    for j in 0..size { sup_deg[j] = sup_adj[j].count_ones() as usize }
+    let mut st = Isso {
+        sub_sorted,
+        sub_adj: adj_masks(sub),
+        sup_adj,
+        sup_deg,
+        req: [0; 16],
+        vec: [UNFILLED; 16],
+        used: 0,
+        size,
+    };
+    if st.go(0) {
+        T::from_perm(Perm::new_unchecked(st.vec[..size].to_vec()))
+    } else {
+        T::failure()
+    }
 }
 
 pub fn build_sorted_row(gr: &Graph) -> Vec<(usize, usize)> {

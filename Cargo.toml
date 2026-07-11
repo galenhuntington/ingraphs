@@ -3,6 +3,10 @@ name = "graphy"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+lto = true
+codegen-units = 1
+
 [dependencies]
 auto_ops = "0.3.0"
 itertools = "0.12.0"
