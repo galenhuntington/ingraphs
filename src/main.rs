@@ -144,8 +144,10 @@ fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<
     let done = AtomicU64::new(0);
     list.par_bridge().find_map_any(|sup| {
         let d = done.fetch_add(1, Ordering::Relaxed);
-        if d % 10_000_000 == 0 {
-            eprint!(" Progress: {} ({})\r", d, tools::timestamp());
+        if d % 1_000_000 == 0 {
+            let dm = d / 1_000_000;
+            eprint!(" Progress: {}M ({})\r", dm, tools::timestamp());
+            if dm % 50 == 0 { eprintln!(); }
         }
         (!tools::ingraph_check(&sup, &sub_sorted, sub)).then_some(sup)
     })
@@ -407,6 +409,7 @@ pub fn main() {
             ingraph_seek(pool, bailout.unwrap_or(usize::MAX));
         }
         C::IngraphCheck { size, bits, path } => {
+            eprintln!("Threads: {}", rayon::current_num_threads());
             let gr = Graph::from_bits(size, bits);
             let ans = ingraph_check(&gr, tools::read_graphs(size, &path));
             println!("{:?} {} {:?} {:?}",
