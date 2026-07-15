@@ -9,6 +9,8 @@ struct Fixed<'a, CB: FnMut(base::BitNum)> {
     pub line: &'a mut Vec<BitNum>,
     pub callback: CB,
     pub filter: (usize, usize),
+    // pinned row values for the top vertices, restricting to a subtree
+    pub prefix: &'a [BitNum],
 }
 
 
@@ -198,7 +200,11 @@ fn recurse(
 ) {
     let offset = base::Graph::triangle(at);
     let so_far_ones = so_far.count_ones();
-    'outer: for row in 0 as BitNum .. 1 << at {
+    let (row_lo, row_hi) = match fixed.prefix.get(fixed.size - 1 - at) {
+        Some(&p) => (p, p + 1),
+        None => (0, 1 << at),
+    };
+    'outer: for row in row_lo..row_hi {
         let mut recheck = recheck;
         // eprintln!("at={} break_bits={:b} so_far={:b} row={:b}", at, break_bits, so_far, row);
         let cur_ones = (so_far_ones + row.count_ones()) as usize;
@@ -259,6 +265,15 @@ fn recurse(
 }
 
 pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: impl FnMut(base::BitNum)) {
+    enumerate_subtree(size, range, &[], callback)
+}
+
+pub fn enumerate_subtree(
+    size: usize,
+    range: Option<(usize, usize)>,
+    prefix: &[BitNum],
+    callback: impl FnMut(base::BitNum),
+) {
     if size == 0 { return }
     recurse(
         &mut Fixed {
@@ -266,6 +281,7 @@ pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: im
             line: &mut Vec::with_capacity(size),
             callback,
             filter: range.unwrap_or((0, BitNum::BITS as usize)),
+            prefix,
         },
         Recursed {
             at: size - 1,

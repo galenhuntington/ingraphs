@@ -51,6 +51,22 @@ pub fn infer_graph(edges: BitNum) -> Graph {
     Graph::from_bits(infer_size(edges), edges)
 }
 
+// Decode nauty's graph6 format; the pair ordering matches ours,
+// but bits are packed high-to-low within 6-bit chars
+pub fn parse_graph6(line: &str) -> BitNum {
+    let bytes = line.as_bytes();
+    let n = (bytes[0] - 63) as usize;
+    assert!(n <= 16, "graph6 too large (or multi-byte size): {}", line);
+    let tri = Graph::triangle(n);
+    assert_eq!(bytes.len(), 1 + tri.div_ceil(6), "Bad graph6 line: {}", line);
+    let mut edges: BitNum = 0;
+    for k in 0..tri {
+        let c = (bytes[1 + k / 6] - 63) as BitNum;
+        edges |= ((c >> (5 - k % 6)) & 1) << k;
+    }
+    edges
+}
+
 pub fn read_graphs<B: Bits>(sz: usize, path: &str) -> impl Iterator<Item=B> {
     use std::fs::File;
     use std::io::{BufReader,BufRead};
@@ -60,7 +76,11 @@ pub fn read_graphs<B: Bits>(sz: usize, path: &str) -> impl Iterator<Item=B> {
     reader.lines().map(move |line| {
         let line = line.unwrap();
         let line = line.split_once(',').map_or(line.as_str(), |x| x.0);
-        let edges = line.parse::<BitNum>().unwrap();
+        let edges = if line.as_bytes().first().is_some_and(|b| b.is_ascii_digit()) {
+            line.parse::<BitNum>().unwrap()
+        } else {
+            parse_graph6(line)
+        };
         B::from_bits(sz, edges)
     })
 }
