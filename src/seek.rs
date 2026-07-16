@@ -3,8 +3,7 @@ use crate::tools;
 use crate::enumerate;
 use dashmap::DashSet;
 use rayon::prelude::*;
-use rand::Rng;
-use rand::thread_rng;
+use rand::{Rng,thread_rng,rngs};
 use std::sync::atomic::{AtomicBool,Ordering};
 
 struct Fixed<'a> {
@@ -12,7 +11,7 @@ struct Fixed<'a> {
     seen: &'a DashSet<BitNum>,
     row: &'a Vec<(usize, usize)>,
     limit: usize,
-    rng: rand::rngs::ThreadRng,
+    rng: rngs::ThreadRng,
     quit: &'a AtomicBool,
     // Size limitations only seem to slow things down.
     // top_size: u32,
