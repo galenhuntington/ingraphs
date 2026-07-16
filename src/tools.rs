@@ -43,6 +43,7 @@ pub fn hi_bit_ix(n: BitNum) -> usize {
 }
 
 pub fn infer_size(edges: BitNum) -> usize {
+    if edges == 0 { return 1 }
     rev_hi_index(hi_bit_ix(edges)) + 1
 }
 

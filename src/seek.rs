@@ -61,6 +61,7 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
 
 pub fn seek(gr: &Graph, limit: usize) -> (Option<Graph>, usize) {
     let seen = &DashSet::new();
+    let quit = &AtomicBool::new(false);
     /*
     for grm in tools::bump(&gr, false) {
         let grm = Graph::from_bits(gr.size, grm);
@@ -78,7 +79,7 @@ pub fn seek(gr: &Graph, limit: usize) -> (Option<Graph>, usize) {
                 row: &tools::build_sorted_row(gr),
                 limit,
                 rng: thread_rng(),
-                quit: &AtomicBool::new(false),
+                quit,
                 // top_size: (Graph::triangle(gr.size) as u32 + 1) / 2,
                 // bit_mask: (1 << Graph::triangle(gr.size)) - 1,
             },

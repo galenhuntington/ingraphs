@@ -266,9 +266,9 @@ enum C {
     },
     /// Filter a file of graphs to those within an edge count range
     Filter {
-        /// Minimum number of vertices
+        /// Minimum number of edges
         min: usize,
-        /// Maximum number of vertices
+        /// Maximum number of edges
         max: usize,
         /// Graphs file
         path: String,
