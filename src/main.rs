@@ -295,6 +295,8 @@ enum C {
         /// Force showing as table
         #[arg(long)]
         table: bool,
+        #[arg(long)]
+        color: bool,
         #[arg(help = "/ [GRAPHS] ...")]
         graphs: Vec<String>,
     },
@@ -421,7 +423,7 @@ pub fn main() {
             let pool = tools::read_graphs(size, &path);
             successors(size, pool, max.unwrap_or(BitNum::MAX));
         }
-        C::IsSubgraph { table, graphs } => {
+        C::IsSubgraph { table, color, graphs } => {
             let (subs, sups) = parse_subgraph_args(graphs).unwrap_or_else(||
                 clap::Error::new(clap::error::ErrorKind::InvalidValue).exit()
             );
@@ -445,7 +447,12 @@ pub fn main() {
                     let size = tools::infer_size(*sup);
                     let sub = Graph::from_bits(size, sub);
                     let sup = Graph::from_bits(size, *sup);
-                    print!(" {:>width$}", tools::is_subgraph_of(&sub, &sup));
+                    let ans = tools::is_subgraph_of(&sub, &sup);
+                    print!(" {}{:>width$}{}",
+                        if color { if ans { "\x1b[01;32m" } else { "\x1b[01;31m" } } else { "" },
+                        tools::is_subgraph_of(&sub, &sup),
+                        if color { "\x1b[00m" } else { "" },
+                        );
                 }
                 if table { println!() }
             }
