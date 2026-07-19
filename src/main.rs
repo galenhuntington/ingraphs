@@ -9,6 +9,7 @@ pub mod progress;
 use base::{Graph, BitNum,Bits};
 use std::collections::BTreeSet;
 use clap::{Parser,Subcommand};
+use std::time::{Instant,Duration};
 
 pub fn enumerate(size: usize, range: Option<(usize, usize)>, prefix: &[BitNum]) {
     use std::io::Write;
@@ -80,17 +81,10 @@ fn ingraph_scan(size: usize, pool: impl Iterator<Item=Graph>) {
     }
 }
 
-fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
+fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, seeds: &[BitNum]) {
     let progress = progress::Progress::new();
-    let mut counterexamples: BTreeSet<_> = [
-        /* can be pre-seeded with known good counterexamples
-        222440911461030517325,
-        575931951871459327,
-        2295603145647364455412,
-        544909132271975424,
-        541524869842467840,
-        */
-    ].into_iter().map(|ce| (0, ce)).collect();
+    let no_time = Duration::from_secs(0);
+    let mut counterexamples: BTreeSet<_> = seeds.iter().map(|&ce| (no_time, ce, 0)).collect();
     for (i, gr) in pool.enumerate() {
         let val = gr.bits();
         let ec = val.count_ones();
@@ -100,15 +94,21 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
         let chkce = {
             let sub_sorted = tools::build_sorted_row(&gr);
             let mut ans = None;
-            let vec: Vec<_> = counterexamples.iter().rev().cloned().collect();
-            for el@(_, sup) in vec {
-                let sup = Graph::from_bits(gr.size, sup);
-                if !tools::ingraph_check(&sup, &sub_sorted, &gr) {
-                    counterexamples.remove(&el);
-                    counterexamples.insert((i, sup.bits()));
-                    // counterexamples.insert((ce_score(&gr1), gr1.bits()));
-                    ans = Some(el.1);
-                    break;
+            let vec: Vec<_> = counterexamples.iter().cloned().collect();
+            for el@(d1, supb, j) in vec {
+                let sup = Graph::from_bits(gr.size, supb);
+                let t0 = Instant::now();
+                let chk = tools::ingraph_check(&sup, &sub_sorted, &gr);
+                let d = t0.elapsed();
+                counterexamples.remove(&el);
+                if chk {
+                    if i < j + 10_000 {
+                        counterexamples.insert((d.max(d1), supb, j));
+                    }
+                } else {
+                    counterexamples.insert((d, supb, i));
+                    ans = Some(supb);
+                    break
                 }
             }
             ans
@@ -118,7 +118,7 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
                 || {
                     let seek = crate::seek::seek(&gr, bailout);
                     if let Some(gr1) = seek.0 {
-                        counterexamples.insert((i, gr1.bits()));
+                        counterexamples.insert((no_time, gr1.bits(), i));
                         // counterexamples.insert((ce_score(&gr1), gr1.bits()));
                     }
                     (seek.0.map(|g| g.bits()), seek.1)
@@ -329,6 +329,9 @@ enum C {
         /// Bail out after this many checks
         #[arg(long)]
         bailout: Option<usize>,
+        /// Seed the counterexample pool
+        #[arg(long, value_delimiter = ',')]
+        seeds: Vec<BitNum>,
     },
     /// Check if a single graph is an ingraph
     IngraphCheck {
@@ -488,10 +491,10 @@ pub fn main() {
             let pool = tools::read_graphs(size, &path);
             ingraph_scan(size, pool);
         }
-        C::IngraphSeek { size, path, bailout } => {
+        C::IngraphSeek { size, path, bailout, seeds } => {
             eprintln!("Threads: {}", rayon::current_num_threads());
             let pool = tools::read_graphs(size, &path);
-            ingraph_seek(pool, bailout.unwrap_or(usize::MAX));
+            ingraph_seek(pool, bailout.unwrap_or(usize::MAX), &seeds);
         }
         C::IngraphCheck { size, bits, path } => {
             eprintln!("Threads: {}", rayon::current_num_threads());
