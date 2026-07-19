@@ -4,11 +4,13 @@ use crate::tools::one_bits;
 use crate::perm::Perm;
 use std::cmp::Ordering::*;
 
-struct Fixed<'a, CB: Fn(base::BitNum)> {
+struct Fixed<'a, CB: FnMut(base::BitNum)> {
     pub size: usize,
     pub line: &'a mut Vec<BitNum>,
     pub callback: CB,
     pub filter: (usize, usize),
+    // pinned row values for the top vertices, restricting to a subtree
+    pub prefix: &'a [BitNum],
 }
 
 
@@ -193,12 +195,16 @@ pub fn to_best(gr: &Graph) -> Graph {
 }
 
 fn recurse(
-    fixed: &mut Fixed<impl Fn(base::BitNum)>,
+    fixed: &mut Fixed<impl FnMut(base::BitNum)>,
     Recursed { at, break_bits, so_far, recheck }: Recursed,
 ) {
     let offset = base::Graph::triangle(at);
     let so_far_ones = so_far.count_ones();
-    'outer: for row in 0 as BitNum .. 1 << at {
+    let (row_lo, row_hi) = match fixed.prefix.get(fixed.size - 1 - at) {
+        Some(&p) => (p, p + 1),
+        None => (0, 1 << at),
+    };
+    'outer: for row in row_lo..row_hi {
         let mut recheck = recheck;
         // eprintln!("at={} break_bits={:b} so_far={:b} row={:b}", at, break_bits, so_far, row);
         let cur_ones = (so_far_ones + row.count_ones()) as usize;
@@ -258,7 +264,16 @@ fn recurse(
     }
 }
 
-pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: impl Fn(base::BitNum)) {
+pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: impl FnMut(base::BitNum)) {
+    enumerate_subtree(size, range, &[], callback)
+}
+
+pub fn enumerate_subtree(
+    size: usize,
+    range: Option<(usize, usize)>,
+    prefix: &[BitNum],
+    callback: impl FnMut(base::BitNum),
+) {
     if size == 0 { return }
     recurse(
         &mut Fixed {
@@ -266,6 +281,7 @@ pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: im
             line: &mut Vec::with_capacity(size),
             callback,
             filter: range.unwrap_or((0, BitNum::BITS as usize)),
+            prefix,
         },
         Recursed {
             at: size - 1,
@@ -276,7 +292,7 @@ pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: im
     );
 }
 
-pub fn enumerate_middle(size: usize, callback: fn(base::BitNum)) {
+pub fn enumerate_middle(size: usize, mut callback: impl FnMut(base::BitNum)) {
     let half = Graph::triangle(size) / 2;
     enumerate_graphs(size, Some((half, half)), move |bn| {
         let grc = Graph::from_bits(size, bn).complement();
