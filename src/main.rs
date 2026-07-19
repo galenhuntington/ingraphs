@@ -10,12 +10,16 @@ use base::{Graph, BitNum,Bits};
 use std::collections::BTreeSet;
 use clap::{Parser,Subcommand};
 
-pub fn enumerate(size: usize, range: Option<(usize, usize)>) {
-    enumerate::enumerate_graphs(size, range, |bits| println!("{}", bits));
+pub fn enumerate(size: usize, range: Option<(usize, usize)>, prefix: &[BitNum]) {
+    use std::io::Write;
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    enumerate::enumerate_subtree(size, range, prefix, |bits| { writeln!(out, "{}", bits).unwrap() });
 }
 
 pub fn enumerate_middle(size: usize) {
-    enumerate::enumerate_middle(size, |bits| println!("{}", bits));
+    use std::io::Write;
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    enumerate::enumerate_middle(size, |bits| { writeln!(out, "{}", bits).unwrap() });
 }
 
 // Fixed filename for all graphs used for a few operations
@@ -133,9 +137,77 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize) {
     }
 }
 
-fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph>) -> Option<Graph> {
+fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<Graph> {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     let sub_sorted = tools::build_sorted_row(sub);
-    list.into_iter().find(|sup| !tools::ingraph_check(sup, &sub_sorted, sub))
+    let done = AtomicU64::new(0);
+    list.par_bridge().find_map_any(|sup| {
+        let d = done.fetch_add(1, Ordering::Relaxed);
+        if d % 1_000_000 == 0 {
+            let dm = d / 1_000_000;
+            eprint!(" Progress: {}M ({})\r", dm, tools::timestamp());
+            if dm % 50 == 0 { eprintln!(); }
+        }
+        (!tools::ingraph_check(&sup, &sub_sorted, sub)).then_some(sup)
+    })
+}
+
+fn free_scan(sub: &Graph, list: impl Iterator<Item=Graph> + Send) {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let sub_sorted = tools::build_sorted_row(sub);
+    let done = AtomicU64::new(0);
+    let found = AtomicU64::new(0);
+    list.par_bridge().for_each(|sup| {
+        let d = done.fetch_add(1, Ordering::Relaxed);
+        if d % 1_000_000 == 0 {
+            let dm = d / 1_000_000;
+            eprint!(" Progress: {}M ({})\r", dm, tools::timestamp());
+            if dm % 50 == 0 { eprintln!(); }
+        }
+        if !tools::isso_inner::<bool>(sub, &sub_sorted, &sup) {
+            found.fetch_add(1, Ordering::Relaxed);
+            println!("{},{},{}", sup.bits(), sup, tools::timestamp());
+        }
+    });
+    eprintln!("\nChecked {}, free: {}",
+        done.load(Ordering::Relaxed), found.load(Ordering::Relaxed));
+}
+
+// Upward closure of sub-free seed graphs: repeatedly add edges keeping them
+// sub-free, and for each report whether the complement covers sub.  A "false"
+// in the third column is a counterexample to sub being a universal ingraph.
+fn free_close(sub: &Graph, seeds: impl Iterator<Item=Graph>) {
+    let sub_sorted = tools::build_sorted_row(sub);
+    let mut seen = BTreeSet::new();
+    let mut level = Vec::new();
+    for g in seeds {
+        let g = enumerate::to_best(&g);
+        if seen.insert(g.bits()) { level.push(g) }
+    }
+    let mut count = 0;
+    let mut bad = 0;
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        for g in &level {
+            count += 1;
+            let covered = tools::is_subgraph_of(sub, &g.complement());
+            if !covered { bad += 1 }
+            println!("{},{},{},{}", g.bits(), g.edge_count(), covered, g);
+            for ext in tools::bump(g, true) {
+                if !seen.contains(&ext) {
+                    let eg = Graph::from_bits(g.size, ext);
+                    if !tools::isso_inner::<bool>(sub, &sub_sorted, &eg) {
+                        seen.insert(ext);
+                        next.push(eg);
+                    }
+                }
+            }
+        }
+        level = next;
+    }
+    eprintln!("Closure size: {}, counterexamples: {}", count, bad);
 }
 
 // Counts: modulo complements and symmetries, modulo symmetries, "labelled"
@@ -206,6 +278,9 @@ enum C {
         min: usize,
         /// Maximum number of edges
         max: usize,
+        /// Pin the rows of the top vertices, enumerating one subtree
+        #[arg(long, value_delimiter = ',')]
+        prefix: Vec<BitNum>,
     },
     /// Enumerate all graphs with half the possible edges modulo complements
     EnumerateMiddle {
@@ -305,6 +380,31 @@ enum C {
         /// Graph
         bits: BitNum,
     },
+    /// Scan a file of graphs for those NOT containing a given subgraph
+    FreeScan {
+        /// Number of vertices
+        size: usize,
+        /// Subgraph to seek
+        bits: BitNum,
+        /// Graphs file
+        path: String,
+    },
+    /// Grow subgraph-free seed graphs upward, reporting complement coverage
+    FreeClose {
+        /// Number of vertices
+        size: usize,
+        /// Subgraph to stay free of
+        bits: BitNum,
+        /// Seed graphs file
+        path: String,
+    },
+    /// Canonicalize each graph in a file (decimal or graph6), print numbers
+    Canon {
+        /// Number of vertices
+        size: usize,
+        /// Graphs file
+        path: String,
+    },
     /// Placeholder for custom operations
     Run {
         /// Number of vertices
@@ -347,10 +447,10 @@ pub fn main() {
     let args = Cli::parse();
     match args.command {
         C::Enumerate { size } => {
-            enumerate(size, None);
+            enumerate(size, None, &[]);
         }
-        C::EnumerateFilter { size, min, max } => {
-            enumerate(size, Some((min, max)));
+        C::EnumerateFilter { size, min, max, prefix } => {
+            enumerate(size, Some((min, max)), &prefix);
         }
         C::EnumerateMiddle { size } => {
             let tri = Graph::triangle(size);
@@ -358,7 +458,7 @@ pub fn main() {
             if tri.is_multiple_of(2) {
                 enumerate_middle(size);
             } else {
-                enumerate(size, Some((half, half)));
+                enumerate(size, Some((half, half)), &[]);
             }
         }
         C::Run { size } => {
@@ -394,6 +494,7 @@ pub fn main() {
             ingraph_seek(pool, bailout.unwrap_or(usize::MAX));
         }
         C::IngraphCheck { size, bits, path } => {
+            eprintln!("Threads: {}", rayon::current_num_threads());
             let gr = Graph::from_bits(size, bits);
             let ans = ingraph_check(&gr, tools::read_graphs(size, &path));
             println!("{:?} {} {:?} {:?}",
@@ -454,6 +555,22 @@ pub fn main() {
         C::Complement { size, bits } => {
             let gr = enumerate::to_best(&Graph::from_bits(size, bits).complement());
             println!("{}", gr.bits());
+        }
+        C::FreeScan { size, bits, path } => {
+            eprintln!("Threads: {}", rayon::current_num_threads());
+            let gr = Graph::from_bits(size, bits);
+            free_scan(&gr, tools::read_graphs(size, &path));
+        }
+        C::FreeClose { size, bits, path } => {
+            let gr = Graph::from_bits(size, bits);
+            free_close(&gr, tools::read_graphs(size, &path));
+        }
+        C::Canon { size, path } => {
+            use std::io::Write;
+            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+            for g in tools::read_graphs::<Graph>(size, &path) {
+                writeln!(out, "{}", enumerate::to_best(&g).bits()).unwrap();
+            }
         }
     }
 }
