@@ -120,6 +120,15 @@ impl RVal for BitNum {
     fn val(bn: BitNum) -> BitNum { bn }
 }
 
+// Adjacency of v among all vertices, from the triangle bits
+fn vert_mask(tri: &Triangle, v: usize) -> u32 {
+    let mut m = 0u32;
+    for u in 0..16 {
+        if u != v && tri.get((u, v)) { m |= 1 << u }
+    }
+    m
+}
+
 // The old way didn't really work, new approach.
 fn new_recurse<T: RVal>(
     cur: BitNum,
@@ -137,7 +146,13 @@ fn new_recurse<T: RVal>(
     }
     */
     let mut best = T::score(cur);
-    for swap in (0..=pt).rev() {
+    // vertices already recursed on, for twin skipping; masks computed lazily
+    // so nodes with a single surviving branch pay nothing
+    let mut tried_v = [0usize; 16];
+    let mut tried_m = [0u32; 16];
+    let mut tried_ct = 0;
+    let mut masks_done = 0;
+    'swaps: for swap in (0..=pt).rev() {
         // eprintln!("break_bits={:b} pt={} swap={}", break_bits, pt, swap);
         if pt != swap && BitVec(break_bits).get(swap) { break }
         let slice = if swap == pt {
@@ -162,6 +177,24 @@ fn new_recurse<T: RVal>(
             Greater => continue,
             Equal => {},
         }
+        // Skip twins: if swap has the same neighborhood as a vertex already
+        // recursed on (ignoring one another), the transposition is an
+        // automorphism, so this branch reaches the same values.
+        if tried_ct > 0 {
+            while masks_done < tried_ct {
+                tried_m[masks_done] = vert_mask(&tri, tried_v[masks_done]);
+                masks_done += 1;
+            }
+            let mask = vert_mask(&tri, swap);
+            for i in 0..tried_ct {
+                let both = !((1u32 << swap) | (1 << tried_v[i]));
+                if mask & both == tried_m[i] & both { continue 'swaps }
+            }
+            tried_m[tried_ct] = mask;
+            masks_done = tried_ct + 1;
+        }
+        tried_v[tried_ct] = swap;
+        tried_ct += 1;
         let new_cur = new_permute(cur, pt, swap, slice, BitVec(cand));
         if T::FAIL_FAST && new_cur < cutoff { return T::fail() }
         let new_val = new_recurse(
@@ -328,6 +361,33 @@ mod tests {
         assert_eq!(count, 16);
     }
     */
+
+    #[test]
+    fn test_best_symmetric() {
+        // twin-heavy families where the search used to blow up
+        let rng = &mut rand::thread_rng();
+        for size in 2..=9 {
+            let mut grs = Vec::new();
+            // stars with any center
+            for c in 0..size {
+                grs.push(Graph::from_fn(size, |a, b| a == c || b == c));
+            }
+            // complete bipartite splits
+            for k in 1..size {
+                grs.push(Graph::from_fn(size, |a, b| (a < k) != (b < k)));
+            }
+            // two cliques
+            for k in 1..size {
+                grs.push(Graph::from_fn(size, |a, b| (a < k) == (b < k)));
+            }
+            for gr in grs {
+                // random relabeling
+                let gr = gr.renumber(&crate::perm::Perm::random(rng, size));
+                assert_eq!(to_best(&gr), tools::naive_find_best(&gr), "{}", gr);
+                assert_eq!(is_best(&gr), gr == tools::naive_find_best(&gr));
+            }
+        }
+    }
 
     #[test]
     fn test_best() {

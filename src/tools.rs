@@ -165,6 +165,8 @@ struct Isso<'a> {
     sub_adj: [u32; 16],
     sup_adj: [u32; 16],
     sup_deg: [usize; 16],
+    // sup slots in descending-degree order, tried in this order
+    sup_order: [usize; 16],
     // for each sub vertex, the sup slots its already-placed neighbors occupy
     req: [u32; 16],
     // sup slot -> sub vertex
@@ -187,7 +189,8 @@ impl Isso<'_> {
             return true;
         }
         let req_el = self.req[el];
-        for j in 0..self.size {
+        for jx in 0..self.size {
+            let j = self.sup_order[jx];
             let jb = 1u32 << j;
             if self.used & jb != 0 { continue }
             if el_deg > self.sup_deg[j] { continue }
@@ -220,11 +223,15 @@ pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: 
     let sup_adj = adj_masks(sup);
     let mut sup_deg = [0; 16];
     for j in 0..size { sup_deg[j] = sup_adj[j].count_ones() as usize }
+    let mut sup_order = [0; 16];
+    for j in 0..size { sup_order[j] = j }
+    sup_order[..size].sort_unstable_by_key(|&j| Reverse(sup_deg[j]));
     let mut st = Isso {
         sub_sorted,
         sub_adj: adj_masks(sub),
         sup_adj,
         sup_deg,
+        sup_order,
         req: [0; 16],
         vec: [UNFILLED; 16],
         used: 0,
@@ -237,9 +244,25 @@ pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: 
     }
 }
 
+// Matching order for isso_inner: greedy connected order (most already-placed
+// neighbors first, then highest degree) so each placement is constrained
+// early.  Isolated vertices necessarily land at the end.
 pub fn build_sorted_row(gr: &Graph) -> Vec<(usize, usize)> {
-    let mut row: Vec<_> = (0..gr.size).map(|i| (gr.degree_of(i), i)).collect();
-    row.sort_by_key(|&(d, i)| Reverse((d, i)));
+    let adj = adj_masks(gr);
+    let mut placed = 0u32;
+    let mut row = Vec::with_capacity(gr.size);
+    for _ in 0..gr.size {
+        let best = (0..gr.size)
+            .filter(|v| placed & (1 << v) == 0)
+            .max_by_key(|&v| (
+                (adj[v] & placed).count_ones(),
+                adj[v].count_ones(),
+                Reverse(v),
+            ))
+            .unwrap();
+        row.push((adj[best].count_ones() as usize, best));
+        placed |= 1 << best;
+    }
     row
 }
 
