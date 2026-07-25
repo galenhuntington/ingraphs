@@ -13,9 +13,11 @@ VER=2_8_9
 [ -d nauty$VER ] || tar xzf nauty$VER.tar.gz
 cp prune_sub.c nauty$VER/
 cd nauty$VER
-[ -f makefile ] || ./configure --quiet
+# Claude had -f makefile guard here but that preserved built-in makefile.
+./configure --quiet
 make gtoolsW.o nautyW1.o nautilW1.o naugraphW1.o schreier.o naurng.o
 gcc -o ../gengf -O3 -march=native -DWORDSIZE=32 -DMAXN=WORDSIZE \
     -DPRUNE=prune_sub geng.c prune_sub.c \
     gtoolsW.o nautyW1.o nautilW1.o naugraphW1.o schreier.o naurng.o
 echo "built ./gengf"
+
