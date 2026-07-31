@@ -3,7 +3,7 @@ use crate::tools;
 use crate::enumerate;
 use dashmap::DashSet;
 use rayon::prelude::*;
-use rand::{Rng,thread_rng,rngs};
+use rand::{Rng,thread_rng,rngs,prelude::SliceRandom};
 use std::sync::atomic::{AtomicBool,Ordering};
 
 struct Fixed<'a> {
@@ -42,9 +42,11 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
                 if fixed.quit.load(Ordering::Relaxed) { return None }
                 if !seen.insert(grnext.bits()) { continue }
                 if seen.len() >= fixed.limit { return None }
+                /*
                 if seen.len().is_multiple_of(100_000) {
                     eprint!("\n Checked {}\r", seen.len());
                 }
+                */
                 let ans = recurse(fixed, grnext);
                 if ans.is_some() {
                     // find_map_any doesn't actually stop other threads, so
@@ -68,7 +70,8 @@ pub fn seek(gr: &Graph, limit: usize) -> (Option<Graph>, usize) {
         eprintln!("seek: {} / {} {}", grm, grm.show_bits(), tools::count_symmetries(&grm));
     }
     */
-    let rets = tools::bump(gr, false);
+    let mut rets = tools::bump(gr, false).into_iter().collect::<Vec<_>>();
+    rets.shuffle(&mut thread_rng());
     // let rets: Vec<_> = rets.iter().cloned().rev().collect();
     let res = rets.par_iter().find_map_any(|grm| {
         let grm = Graph::from_bits(gr.size, *grm);
