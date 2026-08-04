@@ -10,8 +10,7 @@ use crate::enumerate;
 use std::cmp::Reverse;
 use std::time::SystemTime;
 use utc_dt::UTCDatetime;
-use fix_fn::fix_fn;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap,BTreeSet};
 
 #[inline]
 pub fn factorial(n: usize) -> usize {
@@ -103,30 +102,116 @@ pub fn naive_find_best(gr: &Graph) -> Graph {
     Graph::from_bits(gr.size, best)
 }
 
+// Backtracking count of color- and adjacency-preserving bijections
+struct AutCount<'a> {
+    verts: &'a [usize],
+    adj: &'a [u32; 16],
+    color: &'a [usize],
+    img: [usize; 16],
+    used: u32,
+}
+
+impl AutCount<'_> {
+    fn go(&mut self, i: usize) -> usize {
+        if i == self.verts.len() { return 1 }
+        let v = self.verts[i];
+        let mut total = 0;
+        for k in 0..self.verts.len() {
+            let c = self.verts[k];
+            if self.used & (1 << c) != 0 { continue }
+            if self.color[c] != self.color[v] { continue }
+            let ok = self.verts[..i].iter().all(|&w|
+                self.adj[v] >> w & 1 == self.adj[c] >> self.img[w] & 1);
+            if ok {
+                self.img[v] = c;
+                self.used |= 1 << c;
+                total += self.go(i + 1);
+                self.used &= !(1 << c);
+            }
+        }
+        total
+    }
+}
+
+// |Aut| via twin collapsing: vertices with identical neighborhoods (twin
+// classes) contribute a full symmetric group, exactly; collapse them to one
+// colored representative and count the (small) quotient's automorphisms by
+// refinement plus backtracking.
 pub fn count_symmetries(gr: &Graph) -> usize {
     if gr.size <= 2 { return gr.size }
-    // Partition by degree count
-    let mut degs: Vec<Vec<usize>> = vec![Vec::new(); gr.size];
-    for pt in 0..gr.size { degs[gr.degree_of(pt)].push(pt); }
-    let degs = degs;
-    let go = fix_fn!(|go, deg: usize, perm: &Perm| -> usize {
-        let vec = &degs[deg];
-        all_perms(vec.len()).map(|p| {
-            let mut pn = Perm::identity(gr.size).into_vec();
-            for (i, &pt) in vec.iter().enumerate() {
-                pn[pt] = vec[p.apply(i)];
+    let n = gr.size;
+    let adj = adj_masks(gr);
+    let mut alive: u32 = (1 << n) - 1;
+    let mut color = vec![0usize; n];
+    let mut next_color = 1;
+    let mut mult: usize = 1;
+
+    // collapse twin classes (open: same neighborhood; closed: same closed
+    // neighborhood) until none remain; classes of equal prior color, size,
+    // and type stay interchangeable, so they share a fresh color
+    loop {
+        let mut changed = false;
+        'types: for closed in [false, true] {
+            let mut groups: BTreeMap<(usize, u32), Vec<usize>> = BTreeMap::new();
+            for v in 0..n {
+                if alive & (1 << v) == 0 { continue }
+                let mut key = adj[v] & alive;
+                if closed { key |= 1 << v }
+                groups.entry((color[v], key)).or_default().push(v);
             }
-            let p2 = perm * Perm::new_unchecked(pn);
-            if deg >= gr.size - 2 {
-                let g = gr.unrenumber(&p2);
-                if g.edges == gr.edges { 1 } else { 0 }
-            } else {
-                go(deg + 1, &p2)
+            let mut sigs: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+            for ((c, _), vs) in groups {
+                if vs.len() < 2 { continue }
+                mult *= factorial(vs.len());
+                for &v in &vs[1..] { alive &= !(1 << v) }
+                let nc = *sigs.entry((c, vs.len())).or_insert_with(|| {
+                    next_color += 1;
+                    next_color - 1
+                });
+                color[vs[0]] = nc;
+                changed = true;
             }
-        }).sum()
-    });
-    go(1, &Perm::identity(gr.size))
-        * factorial(degs[0].len()) * factorial(degs[gr.size - 1].len())
+            if changed { break 'types }
+        }
+        if !changed { break }
+    }
+
+    // color refinement (1-WL) on the quotient
+    let vs: Vec<usize> = (0..n).filter(|v| alive & (1 << *v) != 0).collect();
+    loop {
+        let before: BTreeSet<_> = vs.iter().map(|&v| color[v]).collect();
+        let mut sigs: BTreeMap<(usize, Vec<usize>), Vec<usize>> = BTreeMap::new();
+        for &v in &vs {
+            let mut ns: Vec<usize> = vs.iter()
+                .filter(|&&u| adj[v] >> u & 1 == 1)
+                .map(|&u| color[u]).collect();
+            ns.sort();
+            sigs.entry((color[v], ns)).or_default().push(v);
+        }
+        if sigs.len() == before.len() { break }
+        let base = next_color;
+        for (i, (_, cl)) in sigs.into_iter().enumerate() {
+            for v in cl { color[v] = base + i }
+        }
+        next_color = base + n;
+    }
+
+    // most-constrained-first: smaller color classes early
+    let mut class_size = BTreeMap::new();
+    for &v in &vs { *class_size.entry(color[v]).or_insert(0usize) += 1 }
+    let mut verts = vs;
+    verts.sort_by_key(|&v| (class_size[&color[v]], color[v], v));
+
+    let mut quot_adj = [0u32; 16];
+    for &v in &verts { quot_adj[v] = adj[v] & alive }
+    let mut ac = AutCount {
+        verts: &verts,
+        adj: &quot_adj,
+        color: &color,
+        img: [usize::MAX; 16],
+        used: 0,
+    };
+    mult * ac.go(0)
 }
 
 const UNFILLED: usize = 0xfffff;
@@ -352,6 +437,28 @@ mod tests {
             let size = rng.gen_range(2..=9);
             let gr = random_graph(rng, size);
             assert_eq!(count_symmetries(&gr), count_symmetries_slow(&gr), "{}", gr);
+        }
+    }
+    #[test]
+    fn test_count_symmetries_symmetric() {
+        // twin-heavy and structured families
+        for size in 3..=9 {
+            let mut grs = vec![
+                Graph::from_fn(size, |_, _| true),                    // complete
+                Graph::from_fn(size, |_, _| false),                   // empty
+                Graph::from_fn(size, |a, b| a == 0 || b == 0),        // star
+                Graph::from_fn(size, |a, b| (a < size/2) != (b < size/2)),  // bipartite
+                Graph::from_fn(size, |a, b| (a < size/2) == (b < size/2)),  // cliques
+                Graph::from_fn(size, |a, b| a + 1 == b || b + 1 == a),      // path
+                Graph::from_fn(size, |a, b| (a + 1) % size == b || (b + 1) % size == a), // cycle
+                Graph::from_fn(size, |a, b| a % 3 != b % 3),          // tripartite
+            ];
+            for k in 0..3 {
+                grs.push(Graph::from_fn(size, |a, b| (a + b) % 3 == k));
+            }
+            for gr in grs {
+                assert_eq!(count_symmetries(&gr), count_symmetries_slow(&gr), "{}", gr);
+            }
         }
     }
 }

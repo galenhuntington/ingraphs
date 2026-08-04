@@ -153,6 +153,33 @@ fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<
     })
 }
 
+// Test each candidate ingraph against a shared library of counterexamples;
+// a library graph H refutes candidate G if G embeds in neither H nor its
+// complement.  Prints candidate,refuter (or None for survivors).
+fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
+    use rayon::prelude::*;
+    let library: Vec<Graph> = library.iter()
+        .map(|&h| Graph::from_bits(size, h)).collect();
+    let progress = std::sync::atomic::AtomicU64::new(0);
+    let survived = std::sync::atomic::AtomicU64::new(0);
+    let results: Vec<_> = candidates.par_iter().map(|&g| {
+        let gr = Graph::from_bits(size, g);
+        let sorted = tools::build_sorted_row(&gr);
+        let hit = library.iter()
+            .find(|h| !tools::ingraph_check(h, &sorted, &gr))
+            .map(|h| h.bits());
+        let d = progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if hit.is_none() { survived.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+        if d % 1000 == 0 { eprint!(" Progress: {}k\r", d / 1000); }
+        (g, hit)
+    }).collect();
+    for (g, hit) in results {
+        println!("{},{:?}", g, hit);
+    }
+    eprintln!("\nCandidates: {}, survivors: {}",
+        candidates.len(), survived.load(std::sync::atomic::Ordering::Relaxed));
+}
+
 fn free_scan(sub: &Graph, list: impl Iterator<Item=Graph> + Send) {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -394,6 +421,15 @@ enum C {
         /// Graphs file
         path: String,
     },
+    /// Refute candidate ingraphs en masse against a counterexample library
+    Cull {
+        /// Number of vertices
+        size: usize,
+        /// Candidates file
+        path: String,
+        /// Counterexamples file
+        library: String,
+    },
     /// Grow subgraph-free seed graphs upward, reporting complement coverage
     FreeClose {
         /// Number of vertices
@@ -570,6 +606,13 @@ pub fn main() {
             eprintln!("Threads: {}", rayon::current_num_threads());
             let gr = Graph::from_bits(size, bits);
             free_scan(&gr, tools::read_graphs(size, &path));
+        }
+        C::Cull { size, path, library } => {
+            eprintln!("Threads: {}", rayon::current_num_threads());
+            let cands: Vec<BitNum> = tools::read_graphs(size, &path).collect();
+            let lib: Vec<BitNum> = tools::read_graphs(size, &library).collect();
+            eprintln!("Candidates: {}, library: {}", cands.len(), lib.len());
+            cull(size, cands, &lib);
         }
         C::FreeClose { size, bits, path } => {
             let gr = Graph::from_bits(size, bits);
