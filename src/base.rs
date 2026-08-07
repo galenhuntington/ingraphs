@@ -6,7 +6,8 @@ use crate::perm::*;
 use std::fmt;
 
 type Pair = (usize, usize);
-// can be u64 if graphs max size is 11
+// BitNum can be u64 if graphs' max size is 11
+pub const MAX_SIZE: usize = 16;
 pub type BitNum = u128;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd)]
@@ -38,10 +39,10 @@ impl Bits for BitNum {
 }
 
 impl BitVec {
-    #[inline] pub fn new() -> Self { BitVec(0) }
-    #[inline] pub fn set(&mut self, i: usize) { self.0 |= 1 << i }
-    #[inline] pub fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
-    #[inline] pub fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
+    #[inline] pub const fn new() -> Self { BitVec(0) }
+    #[inline] pub const fn set(&mut self, i: usize) { self.0 |= 1 << i }
+    #[inline] pub const fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
+    #[inline] pub const fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
 }
 
 impl Default for BitVec { fn default() -> Self { Self::new() } }
@@ -60,13 +61,13 @@ pub struct Graph { pub size: usize, pub edges: Triangle }
 
 impl Triangle {
     #[inline]
-    pub fn empty(_sz: usize) -> Self { Triangle(BitVec(0)) }
+    pub const fn empty(_sz: usize) -> Self { Triangle(BitVec(0)) }
     #[inline]
-    pub fn get(&self, (a, b): Pair) -> bool { self.0.get(index(a, b)) }
+    pub const fn get(&self, (a, b): Pair) -> bool { self.0.get(index(a, b)) }
     #[inline]
-    pub fn set(&mut self, (a, b): Pair) { self.0.set(index(a, b)) }
+    pub const fn set(&mut self, (a, b): Pair) { self.0.set(index(a, b)) }
     #[inline]
-    pub fn unset(&mut self, (a, b): Pair) { self.0.unset(index(a, b)) }
+    pub const fn unset(&mut self, (a, b): Pair) { self.0.unset(index(a, b)) }
 }
 
 impl Bits for Triangle {
@@ -93,24 +94,23 @@ pub fn rev_index(i: usize) -> Pair {
     (a, b)
 }
 
-const EDGE_VECS: [BitNum; 16] = [
-    0x20008004004008020101020844b_u128 as BitNum,
-    0x400100080080100402020410895_u128 as BitNum,
-    0x800200100100200804040821126_u128 as BitNum,
-    0x1000400200200401008081042238_u128 as BitNum,
-    0x20008004004008020101020843c0_u128 as BitNum,
-    0x4001000800801004020204107c00_u128 as BitNum,
-    0x80020010010020080404081f8000_u128 as BitNum,
-    0x1000400200200401008080fe00000_u128 as BitNum,
-    0x20008004004008020100ff0000000_u128 as BitNum,
-    0x400100080080100401ff000000000_u128 as BitNum,
-    0x8002001001002007fe00000000000_u128 as BitNum,
-    0x10004002002003ff80000000000000_u128 as BitNum,
-    0x20008004003ffc0000000000000000_u128 as BitNum,
-    0x40010007ffc0000000000000000000_u128 as BitNum,
-    0x8001fff80000000000000000000000_u128 as BitNum,
-    0xfffe00000000000000000000000000_u128 as BitNum,
-];
+const EDGE_VECS: [BitNum; MAX_SIZE] = {
+    let mut vecs = [0; MAX_SIZE];
+    let mut i = 0;
+    while i < MAX_SIZE {
+        let mut tri = Triangle(BitVec(0));
+        let mut j = 0;
+        while j < MAX_SIZE {
+            if i != j { tri.set((i, j)) }
+            j += 1;
+        }
+        vecs[i] = tri.0.0;
+        i += 1;
+    }
+    /*
+*/
+    vecs
+};
 
 impl Graph {
     pub fn new(size: usize, edges: Triangle ) -> Self {
@@ -203,7 +203,7 @@ mod tests {
     fn test_renumber() {
         let rng = &mut rand::thread_rng();
         for _ in 1..80_000 {
-            let len = rng.gen_range(2..11);
+            let len = rng.gen_range(2..MAX_SIZE);
             let p = Perm::random(rng, len);
             // XXX lopsided distro
             let b = rng.gen_range(1..len);
@@ -222,7 +222,7 @@ mod tests {
     fn test_fast_degree() {
         let rng = &mut rand::thread_rng();
         for _ in 0 .. 100_000 {
-            let sz = rng.gen_range(1..=11);
+            let sz = rng.gen_range(1..=MAX_SIZE);
             let gr = random_graph(rng, sz);
             for j in 0 .. sz {
                 assert_eq!(gr.slow_degree_of(j), gr.degree_of(j), "{:?}/{}\n", gr, j);
@@ -236,18 +236,9 @@ mod tests {
         let gr = Graph::from_bits(10, 0b1100101);
         assert_eq!(gr.edges.show_bits(), "1_100_10_1");
     }
-    /*
     #[test]
-    fn test_output() {
-        // used to generate the EDGE_VECS
-        for i in 0..16 {
-            let mut gr = Graph::from_bits(i, 0);
-            for j in 0..16 {
-                if i != j { gr.edges.set((i, j)) }
-            }
-            println!("0x{:x},", gr.edges.0.0);
-        }
+    fn test_edge_vec() {
+        assert_eq!(EDGE_VECS[10], 0x8002001001002007fe00000000000_u128 as BitNum);
     }
-    */
 }
 
