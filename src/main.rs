@@ -6,7 +6,7 @@ pub mod enumerate;
 pub mod seek;
 pub mod progress;
 
-use base::{Graph, BitNum,Bits};
+use base::{Graph,BitNum,Bits};
 use std::collections::BTreeSet;
 use clap::{Parser,Subcommand};
 use std::time::{Instant,Duration};
@@ -446,6 +446,13 @@ enum C {
         /// Graphs file
         path: String,
     },
+    /// Ouput matrices for Nauty's "amtog".
+    Matrix {
+        /// Number of vertices
+        size: usize,
+        /// Graphs file
+        path: String,
+    },
     /// Placeholder for custom operations
     Run {
         /// Number of vertices
@@ -623,6 +630,17 @@ pub fn main() {
             let mut out = std::io::BufWriter::new(std::io::stdout().lock());
             for g in tools::read_graphs::<Graph>(size, &path) {
                 writeln!(out, "{}", enumerate::to_best(&g).bits()).unwrap();
+            }
+        }
+        C::Matrix { size, path } => {
+            for g in tools::read_graphs::<Graph>(size, &path) {
+                print!("n={size} t");
+                for i in 0 .. size {
+                    for j in i+1 .. size {
+                        print!(" {}", g.edges.get((i, j)) as u8);
+                    }
+                }
+                println!();
             }
         }
     }
