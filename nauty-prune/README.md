@@ -12,7 +12,17 @@ graphy's decimal encoding (pair (a,b), a<b, is bit b(b-1)/2+a).  Omit
 trailing isolated vertices (i.e. just use the number): the fewer
 vertices the subgraph has, the earlier the pruning starts.  The matcher
 anchors on the newest vertex (sound because the parent already passed
-the test), which makes the per-node cost small.
+the test), tries high-degree host vertices first, and forward-checks
+viable-slot masks.
+
+`GRAPHY_SUB` may also be a comma-separated list; then a graph is pruned
+only when it contains *all* of the listed subgraphs, so the output is
+the union of the individual sub-free sets (classify afterwards with
+`graphy free-scan` per sub — the outputs are tiny).  Anchoring stays
+sound via a per-level record of which subs each ancestor already
+contained.  In tests on sibling candidates the union run cost only
+slightly less than separate runs (~10%), so this is mainly a
+convenience.
 
 Example — all 13-vertex 39-edge graphs not containing candidate
 69539838912, one slice of 600000:
