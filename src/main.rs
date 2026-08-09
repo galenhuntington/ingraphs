@@ -81,7 +81,7 @@ fn ingraph_scan(size: usize, pool: impl Iterator<Item=Graph>) {
     }
 }
 
-fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, seeds: &[BitNum]) {
+fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, expiration: usize, seeds: &[BitNum]) {
     let progress = progress::Progress::new();
     let no_time = Duration::from_secs(0);
     let mut counterexamples: BTreeSet<_> = seeds.iter().map(|&ce| (no_time, ce, 0)).collect();
@@ -102,7 +102,7 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, seeds: &[BitNum
                 let d = t0.elapsed();
                 counterexamples.remove(&el);
                 if chk {
-                    if i < j + 10_000 {
+                    if expiration == 0 || i < j + expiration {
                         counterexamples.insert((d.max(d1), supb, j));
                     }
                 } else {
@@ -356,6 +356,9 @@ enum C {
         /// Bail out after this many checks
         #[arg(long)]
         bailout: Option<usize>,
+        /// Expiration for unhelpful counterexamples (0 to never expire).
+        #[arg(long, default_value_t=10_000)]
+        expiration: usize,
         /// Seed the counterexample pool
         #[arg(long, value_delimiter = ',')]
         seeds: Vec<BitNum>,
@@ -446,7 +449,7 @@ enum C {
         /// Graphs file
         path: String,
     },
-    /// Ouput matrices for Nauty's "amtog".
+    /// Output matrices for Nauty's "amtog".
     Matrix {
         /// Number of vertices
         size: usize,
@@ -536,10 +539,10 @@ pub fn main() {
             let pool = tools::read_graphs(size, &path);
             ingraph_scan(size, pool);
         }
-        C::IngraphSeek { size, path, bailout, seeds } => {
+        C::IngraphSeek { size, path, bailout, seeds, expiration } => {
             eprintln!("Threads: {}", rayon::current_num_threads());
             let pool = tools::read_graphs(size, &path);
-            ingraph_seek(pool, bailout.unwrap_or(usize::MAX), &seeds);
+            ingraph_seek(pool, bailout.unwrap_or(usize::MAX), expiration, &seeds);
         }
         C::IngraphCheck { size, bits, path } => {
             eprintln!("Threads: {}", rayon::current_num_threads());
