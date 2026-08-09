@@ -62,6 +62,7 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
 }
 
 pub fn seek(gr: &Graph, limit: usize) -> (Option<Graph>, usize) {
+    if limit == 0 { return (None, 1) }
     let seen = &DashSet::new();
     let quit = &AtomicBool::new(false);
     /*
