@@ -16,7 +16,12 @@ DIR=output/runs$SIZE/$CAND-$MOD
 mkdir -p "$DIR"
 SEEDS="$DIR/seed-$RES.g6"
 LOG="$DIR/log-$RES.log"
-: >"$LOG"
-{ time GRAPHY_SUB=$CAND ./nauty-prune/gengf -q "$SIZE" $MID:$MID "$RES/$MOD" >"$SEEDS"; } 2>>"$LOG"
-./target/release/graphy free-close "$SIZE" "$CAND" "$SEEDS" >"$DIR/found-$RES.csv" 2>>"$LOG"
 
+{
+  time {
+    GRAPHY_SUB=$CAND ./nauty-prune/gengf -q "$SIZE" $MID:$MID "$RES/$MOD" >"$SEEDS"
+    ./target/release/graphy free-close "$SIZE" "$CAND" "$SEEDS" >"$DIR/found-$RES.csv"
+  }
+} 2>"$LOG"
+
+# vim: expandtab tabstop=2
