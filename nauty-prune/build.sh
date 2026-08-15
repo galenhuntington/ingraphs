@@ -9,11 +9,13 @@
 set -e
 cd "$(dirname "$0")"
 VER=2_8_9
-[ -f nauty$VER.tar.gz ] || curl -sLO https://pallini.di.uniroma1.it/nauty$VER.tar.gz
-[ -d nauty$VER ] || tar xzf nauty$VER.tar.gz
+SHA224=67f49e7f4152105926a509766b892327d15f76177088ada003ee61c5
+FILE=nauty$VER.tar.gz
+[ -f $FILE ] || curl -sLO https://pallini.di.uniroma1.it/$FILE
+[ "$(sha224sum $FILE | cut -f1 -d' ')" = $SHA224 ] || { echo Checksum mismatch for tar file.; exit 1; }
+[ -d nauty$VER ] || tar xzf $FILE
 cp prune_sub.c nauty$VER/
 cd nauty$VER
-# Claude had -f makefile guard here but that preserved built-in makefile.
 ./configure --quiet
 make gtoolsW.o nautyW1.o nautilW1.o naugraphW1.o schreier.o naurng.o
 gcc -o ../gengf -O3 -march=native -DWORDSIZE=32 -DMAXN=WORDSIZE \
