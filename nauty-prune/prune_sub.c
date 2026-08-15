@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MAXSUBS 8
+#define MAXSUBS 64
 
 static int inited = 0;
 static int nsubs = 0;
@@ -34,10 +34,12 @@ typedef struct {
     int order[16];     /* matching order: connected, degree descending */
 } subgraph;
 
+typedef unsigned long long mask_t;
+
 static subgraph subs[MAXSUBS];
 
 /* subs already contained at each level of the current DFS chain */
-static unsigned level_mask[64];
+static mask_t level_mask[64];
 
 static int sup_n;
 static int sup_deg[16];
@@ -171,8 +173,8 @@ static int contains_anchored(const subgraph *s)
 int prune_sub(graph *g, int n, int maxn)
 {
     if (!inited) init();
-    unsigned pmask = n > 1 ? level_mask[n-1] : 0;
-    unsigned all = (1u << nsubs) - 1;
+    mask_t pmask = n > 1 ? level_mask[n-1] : 0;
+    mask_t all = (1ull << nsubs) - 1;
     if (pmask == all) return 1;   /* ancestor already contained everything */
     sup_n = n;
     for (int i = 0; i < n; i++) {
@@ -190,11 +192,12 @@ int prune_sub(graph *g, int n, int maxn)
         }
         sup_order[j] = i;
     }
-    unsigned mask = pmask;
+    mask_t mask = pmask;
     for (int s = 0; s < nsubs; s++) {
-        if (mask & (1u << s)) continue;
+        mask_t sbit = 1ull << s;
+        if (mask & sbit) continue;
         if (n < subs[s].n) continue;
-        if (contains_anchored(&subs[s])) mask |= 1u << s;
+        if (contains_anchored(&subs[s])) mask |= sbit;
     }
     level_mask[n] = mask;
     return mask == all;
