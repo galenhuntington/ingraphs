@@ -36,6 +36,8 @@ typedef struct {
 
 typedef unsigned long long mask_t;
 
+typedef unsigned __int128 bits_t;
+
 static subgraph subs[MAXSUBS];
 
 /* subs already contained at each level of the current DFS chain */
@@ -54,7 +56,18 @@ static int undo_u[512];
 static unsigned undo_m[512];
 static int undo_sp;
 
-static void init_one(subgraph *s, unsigned long long bits)
+static bits_t strtobits(const char *s)
+{
+    bits_t bits = 0;
+    while (*s) {
+        if (*s < '0' || *s > '9') { fprintf(stderr, ">E GRAPHY_SUB bad char\n"); exit(1); }
+        bits = bits*10 + (*s - '0');
+        s++;
+    }
+    return bits;
+}
+
+static void init_one(subgraph *s, bits_t bits)
 {
     s->n = 2;
     while (bits >> (s->n*(s->n-1)/2)) s->n++;
@@ -94,12 +107,12 @@ static void init(void)
     for (char *tok = strtok_r(buf, ",", &save); tok;
             tok = strtok_r(NULL, ",", &save)) {
         if (nsubs == MAXSUBS) { fprintf(stderr, ">E too many subs\n"); exit(1); }
-        unsigned long long bits = strtoull(tok, NULL, 10);
+        bits_t bits = strtobits(tok);
         if (!bits) { fprintf(stderr, ">E GRAPHY_SUB empty graph\n"); exit(1); }
         memset(&subs[nsubs], 0, sizeof(subgraph));
         init_one(&subs[nsubs], bits);
-        fprintf(stderr, ">A pruning graphs containing %llu (%d vertices)%s\n",
-            bits, subs[nsubs].n, nsubs ? " (conjunctive)" : "");
+        fprintf(stderr, ">A pruning graphs containing %s (%d vertices)%s\n",
+            tok, subs[nsubs].n, nsubs ? " (conjunctive)" : "");
         nsubs++;
     }
     free(buf);

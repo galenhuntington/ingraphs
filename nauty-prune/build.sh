@@ -16,7 +16,7 @@ FILE=nauty$VER.tar.gz
 [ -d nauty$VER ] || tar xzf $FILE
 cp prune_sub.c nauty$VER/
 cd nauty$VER
-./configure --quiet
+grep -q gtoolsW makefile || ./configure --quiet
 make gtoolsW.o nautyW1.o nautilW1.o naugraphW1.o schreier.o naurng.o
 gcc -o ../gengf -O3 -march=native -DWORDSIZE=32 -DMAXN=WORDSIZE \
     -DPRUNE=prune_sub geng.c prune_sub.c \
