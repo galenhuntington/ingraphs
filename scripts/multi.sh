@@ -38,7 +38,7 @@ fi
     for g in $GRAPHS; do
        {
          echo "# $g"
-         ./target/release/graphy free-close "$SIZE" "$g" <(RAYON_NUM_THREADS=1 ./target/release/graphy free-scan "$SIZE" "$g" "$SEEDS") | grep false
+         ./target/release/graphy free-close "$SIZE" "$g" <(./target/release/graphy free-scan "$SIZE" "$g" "$SEEDS") | grep false
        } >>"$FOUND"
     done
   }

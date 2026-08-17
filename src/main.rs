@@ -180,26 +180,18 @@ fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
         candidates.len(), survived.load(std::sync::atomic::Ordering::Relaxed));
 }
 
-fn free_scan(sub: &Graph, list: impl Iterator<Item=Graph> + Send) {
-    use rayon::prelude::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+fn free_scan(sub: &Graph, list: impl Iterator<Item=Graph>) {
     let sub_sorted = tools::build_sorted_row(sub);
-    let done = AtomicU64::new(0);
-    let found = AtomicU64::new(0);
-    list.par_bridge().for_each(|sup| {
-        let d = done.fetch_add(1, Ordering::Relaxed);
-        if d % 1_000_000 == 0 {
-            let dm = d / 1_000_000;
-            eprint!(" Progress: {}M ({})\r", dm, tools::timestamp());
-            if dm % 50 == 0 { eprintln!(); }
-        }
+    let mut done = 0;
+    let mut found = 0;
+    for sup in list {
+        done += 1;
         if !tools::isso_inner::<bool>(sub, &sub_sorted, &sup) {
-            found.fetch_add(1, Ordering::Relaxed);
+            found += 1;
             println!("{},{},{}", sup.bits(), sup, tools::timestamp());
         }
-    });
-    eprintln!("\nChecked {}, free: {}",
-        done.load(Ordering::Relaxed), found.load(Ordering::Relaxed));
+    }
+    eprintln!("Checked {}, free: {}", done, found);
 }
 
 // Upward closure of sub-free seed graphs: repeatedly add edges keeping them
@@ -613,7 +605,6 @@ pub fn main() {
             println!("{}", gr.bits());
         }
         C::FreeScan { size, bits, path } => {
-            eprintln!("Threads: {}", rayon::current_num_threads());
             let gr = Graph::from_bits(size, bits);
             free_scan(&gr, tools::read_graphs(size, &path));
         }
