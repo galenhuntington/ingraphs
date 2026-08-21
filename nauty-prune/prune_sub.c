@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MAXSUBS 64
+#define MAXSUBS 63
 
 static int inited = 0;
 static int nsubs = 0;

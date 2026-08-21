@@ -34,8 +34,7 @@ for g in $(< output/batches/all14); do
    subgcell 6732736 "$g" 💎
    subgcell 816167872 "$g"
    subgcell 207515663232 "$g"
-   echo -n ' |'
-   echo
+   echo ' |'
 done
 
 echo
