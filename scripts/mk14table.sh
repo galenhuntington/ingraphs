@@ -4,8 +4,8 @@
 
 PATH=./target/release:$PATH
 
-echo '| Graph | Vertices | Planar | \|&zwj;Sym&zwj;\| | ⊃ 2nd 10-DUI | ⊃ 11-DUI | ⊃ 12-DUI | ⊃ 2nd 13-DUI |'
-echo '| ---: | ---: | :-: | -: | :-: | :-: | :-: | :-: |'
+echo '| Graph | Vertices | Planar | \|&zwj;Sym&zwj;\| | ⊃ 11-DUI | ⊃ 12-DUI | ⊃ 2nd 13-DUI |'
+echo '| ---: | ---: | :-: | -: | :-: | :-: | :-: |'
 
 cell() {
    FLAG=$1
@@ -21,22 +21,25 @@ subgcell() {
    cell "$(graphy is-subgraph "$SUB" / "$SUP")" "$MARK"
 }
 
+declare -A FNS=([105760086734720]=* [105760105576384]=†)
 for g in $(< output/batches/all14); do
-   SPEC=$(if [ "$g" = 105760086734720 ]; then echo -n '*'; fi)
-   echo -n "| $SPEC$g | "
+   echo -n "| ${FNS[$g]}$g | "
    if (( g < 35184372088832 )); then echo -n 10; else echo -n 11; fi
    echo -n ' |'
    cell "$(graphy matrix 11 <(echo "$g") | amtog -q | planarg -q)"
    echo -n " $(graphy info 11 "$g" | sed 's/.*syms://;s/ .*//') |"
    # subgcell 36216 "$g"
    # subgcell 2202040 "$g"
-   subgcell 6395248 "$g"
+   # subgcell 6395248 "$g"
    subgcell 6732736 "$g" 💎
    subgcell 816167872 "$g"
    subgcell 207515663232 "$g"
-   echo ' |'
+   echo
 done
 
 echo
 echo '\*  Does not extend the 2nd 9-DUI or the 1st 10-DUI.'
+echo
+echo '†  Does not extend the 2nd 10-DUI.'
+# ‡
 
