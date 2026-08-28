@@ -13,7 +13,11 @@ trailing isolated vertices (i.e. just use the number): the fewer
 vertices the subgraph has, the earlier the pruning starts.  The matcher
 anchors on the newest vertex (sound because the parent already passed
 the test), tries high-degree host vertices first, and forward-checks
-viable-slot masks.
+viable-slot masks.  Two symmetry-breaking prunings (mirrored in
+graphy's own matcher): interchangeable sub vertices (twins) must take
+ascending host slots, and a host slot is skipped while an
+interchangeable earlier slot is unused.  Sub components are matched
+densest first, so an unembeddable dense component fails immediately.
 
 `GRAPHY_SUB` may also be a comma-separated list; then a graph is pruned
 only when it contains *all* of the listed subgraphs, so the output is
