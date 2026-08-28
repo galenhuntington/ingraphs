@@ -21,7 +21,8 @@ subgcell() {
    cell "$(graphy is-subgraph "$SUB" / "$SUP")" "$MARK"
 }
 
-declare -A FNS=([105760086734720]=* [105760105576384]=†)
+declare -A FNS=([105760105576384]=*)
+# for g in $(grep Some output/cull14-orbitals.csv | awk -F, '{print$1}'); do
 for g in $(< output/batches/all14); do
    echo -n "| ${FNS[$g]}$g | "
    if (( g < 35184372088832 )); then echo -n 10; else echo -n 11; fi
@@ -38,8 +39,6 @@ for g in $(< output/batches/all14); do
 done
 
 echo
-echo '\*  Does not extend the 2nd 9-DUI or the 1st 10-DUI.'
-echo
-echo '†  Does not extend the 2nd 10-DUI.'
-# ‡
+echo '\*  Does not extend the 2nd 10-DUI.'
+# †‡
 
