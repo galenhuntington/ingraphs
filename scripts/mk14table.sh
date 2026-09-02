@@ -4,8 +4,8 @@
 
 PATH=./target/release:$PATH
 
-echo '| Graph | Vertices | Planar | \|&zwj;Sym&zwj;\| | ⊃ 11-DUI | ⊃ 12-DUI | ⊃ 2nd 13-DUI |'
-echo '| ---: | ---: | :-: | -: | :-: | :-: | :-: |'
+printf '| Graph | Vertices | Planar | \|\u2060Sym\u2060\| | ⊃ 11-DUI | ⊃ 12-DUI | ⊃ 2nd 13-DUI |\n'
+printf '| ---: | ---: | :---: | ---: | :---: | :---: | :---: |\n'
 
 cell() {
    FLAG=$1
@@ -38,7 +38,5 @@ for g in $(< output/batches/all14); do
    echo
 done
 
-echo
-echo '\*  Does not extend the 2nd 10-DUI.'
 # †‡
 

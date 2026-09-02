@@ -48,9 +48,9 @@ article:
 
 ### 14 DUI candidates
 
-These are the 32 candidates for a 14-DUI, with their properties:
+These are the 31 candidates for a 14-DUI, with their properties:
 
-| Graph | Vertices | Planar | \|&zwj;Sym&zwj;\| | ⊃ 11-DUI | ⊃ 12-DUI | ⊃ 2nd 13-DUI |
+| Graph | Vertices | Planar | \|⁠Sym⁠\| | ⊃ 11-DUI | ⊃ 12-DUI | ⊃ 2nd 13-DUI |
 | ---: | ---: | :---: | ---: | :---: | :---: | :---: |
 | 208052533120 | 10 | | 4 | 💎 | | |
 | 208052598656 | 10 | | 4 | 💎 | | ✅ |
