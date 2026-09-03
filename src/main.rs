@@ -11,6 +11,10 @@ use std::collections::BTreeSet;
 use clap::{Parser,Subcommand};
 use std::time::{Instant,Duration};
 
+fn note_threads() {
+    eprintln!("Threads: {}", rayon::current_num_threads());
+}
+
 pub fn enumerate(size: usize, range: Option<(usize, usize)>, prefix: &[BitNum]) {
     use std::io::Write;
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
@@ -532,12 +536,12 @@ pub fn main() {
             ingraph_scan(size, pool);
         }
         C::IngraphSeek { size, path, bailout, seeds, expiration } => {
-            eprintln!("Threads: {}", rayon::current_num_threads());
+            if bailout != Some(0) { note_threads() }
             let pool = tools::read_graphs(size, &path);
             ingraph_seek(pool, bailout.unwrap_or(usize::MAX), expiration, &seeds);
         }
         C::IngraphCheck { size, bits, path } => {
-            eprintln!("Threads: {}", rayon::current_num_threads());
+            note_threads();
             let gr = Graph::from_bits(size, bits);
             let ans = ingraph_check(&gr, tools::read_graphs(size, &path));
             println!("{:?} {} {:?} {:?}",
@@ -609,7 +613,7 @@ pub fn main() {
             free_scan(&gr, tools::read_graphs(size, &path));
         }
         C::Cull { size, path, library } => {
-            eprintln!("Threads: {}", rayon::current_num_threads());
+            note_threads();
             let cands: Vec<BitNum> = tools::read_graphs(size, &path).collect();
             let lib: Vec<BitNum> = tools::read_graphs(size, &library).collect();
             eprintln!("Candidates: {}, library: {}", cands.len(), lib.len());
