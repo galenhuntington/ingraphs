@@ -160,20 +160,22 @@ fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<
 // Test each candidate ingraph against a shared library of counterexamples;
 // a library graph H refutes candidate G if G embeds in neither H nor its
 // complement.  Prints candidate,refuter (or None for survivors).
+// Multithreaded but otherwise often much slower than ingraph-seek, and doesn't stream.
 fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
     use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64,Ordering};
     let library: Vec<Graph> = library.iter()
         .map(|&h| Graph::from_bits(size, h)).collect();
-    let progress = std::sync::atomic::AtomicU64::new(0);
-    let survived = std::sync::atomic::AtomicU64::new(0);
+    let progress = AtomicU64::new(0);
+    let survived = AtomicU64::new(0);
     let results: Vec<_> = candidates.par_iter().map(|&g| {
         let gr = Graph::from_bits(size, g);
         let sorted = tools::build_sorted_row(&gr);
         let hit = library.iter()
             .find(|h| !tools::ingraph_check(h, &sorted, &gr))
             .map(|h| h.bits());
-        let d = progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if hit.is_none() { survived.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+        let d = progress.fetch_add(1, Ordering::Relaxed);
+        if hit.is_none() { survived.fetch_add(1, Ordering::Relaxed); }
         if d % 1000 == 0 { eprint!(" Progress: {}k\r", d / 1000); }
         (g, hit)
     }).collect();
@@ -181,7 +183,7 @@ fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
         println!("{},{:?}", g, hit);
     }
     eprintln!("\nCandidates: {}, survivors: {}",
-        candidates.len(), survived.load(std::sync::atomic::Ordering::Relaxed));
+        candidates.len(), survived.load(Ordering::Relaxed));
 }
 
 fn free_scan(sub: &Graph, list: impl Iterator<Item=Graph>) {
@@ -356,8 +358,11 @@ enum C {
         #[arg(long, default_value_t=10_000)]
         expiration: usize,
         /// Seed the counterexample pool
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_delimiter = ',', conflicts_with = "seed_file")]
         seeds: Vec<BitNum>,
+        /// Seed the counterexample pool from a file
+        #[arg(long)]
+        seed_file: Option<String>,
     },
     /// Check if a single graph is an ingraph
     IngraphCheck {
@@ -535,9 +540,10 @@ pub fn main() {
             let pool = tools::read_graphs(size, &path);
             ingraph_scan(size, pool);
         }
-        C::IngraphSeek { size, path, bailout, seeds, expiration } => {
+        C::IngraphSeek { size, path, bailout, seeds, seed_file, expiration } => {
             if bailout != Some(0) { note_threads() }
             let pool = tools::read_graphs(size, &path);
+            let seeds = seed_file.map_or(seeds, |f| tools::read_graphs(size, &f).collect());
             ingraph_seek(pool, bailout.unwrap_or(usize::MAX), expiration, &seeds);
         }
         C::IngraphCheck { size, bits, path } => {
