@@ -7,6 +7,12 @@ edition = "2024"
 lto = true
 codegen-units = 1
 
+[features]
+default = ["bitnum-u128"]
+bitnum-u64 = []
+bitnum-u128 = []
+bitnum-u256 = ["dep:ethnum"]
+
 [dependencies]
 auto_ops = "0.3.0"
 itertools = "0.12.0"
@@ -17,4 +23,5 @@ utc-dt = "0.3.0"
 clap = { version = "4.5.28", features = ["derive"] }
 rayon = "1.10.0"
 dashmap = "6.1.0"
+ethnum = { version = "1.5.3", optional = true }
 

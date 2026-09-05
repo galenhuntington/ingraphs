@@ -6,7 +6,7 @@ pub mod enumerate;
 pub mod seek;
 pub mod progress;
 
-use base::{Graph,BitNum,Bits};
+use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::BTreeSet;
 use clap::{Parser,Subcommand};
 use std::time::{Instant,Duration};
@@ -38,12 +38,12 @@ pub fn read<B: Bits>(size: usize) -> Vec<B> {
 pub fn run_graphs(_size: usize) {
     // println!("{:?}", seek::seek(&Graph::from_bits(5, 30)));
     // println!("{:?}", seek::seek(&Graph::from_bits(9, 101752)));
-    println!("{:?}", seek::seek_full(&Graph::from_bits(10, 2202040)));
+    println!("{:?}", seek::seek_full(&Graph::from_bits(10, BitNum::from(2202040u64))));
     // println!("{:?}", seek::seek(&Graph::from_bits(10, 2167546)));
 }
 
 fn stats(path: String) {
-    let size = 16; // upper bound; largest we support
+    let size = MAX_SIZE;
     let all = tools::read_graphs::<BitNum>(size, &path);
     let mut counts = vec![0; Graph::triangle(size) + 1];
     for bn in all {
@@ -236,14 +236,14 @@ fn free_close(sub: &Graph, seeds: impl Iterator<Item=Graph>) {
 }
 
 // Counts: modulo complements and symmetries, modulo symmetries, "labelled"
-fn miss_counts(gr: &Graph) -> (usize, usize, usize) {
+fn miss_counts(gr: &Graph) -> (usize, usize, u128) {
     let all = read::<BitNum>(gr.size);
     let half = match Graph::triangle(gr.size) {
         x if x % 2 == 0 => Some(x / 2),
         _ => None,
     };
     let fac = tools::factorial(gr.size);
-    let mut counts = (0, 0, 0);
+    let mut counts = (0usize, 0usize, 0u128);
     for gr1 in tools::noncovers(all.iter().cloned(), gr) {
         let gr1 = Graph::from_bits(gr.size, gr1);
         let syms = fac / tools::count_symmetries(&gr1);

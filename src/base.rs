@@ -6,9 +6,65 @@ use crate::perm::*;
 use std::fmt;
 
 type Pair = (usize, usize);
-// BitNum can be u64 if graphs' max size is 11
-pub const MAX_SIZE: usize = 16;
+
+#[cfg(not(any(feature = "bitnum-u64", feature = "bitnum-u128", feature = "bitnum-u256")))]
+compile_error!("select exactly one BitNum feature: bitnum-u64, bitnum-u128, or bitnum-u256");
+
+#[cfg(any(
+    all(feature = "bitnum-u64", feature = "bitnum-u128"),
+    all(feature = "bitnum-u64", feature = "bitnum-u256"),
+    all(feature = "bitnum-u128", feature = "bitnum-u256"),
+))]
+compile_error!("BitNum features are mutually exclusive; select exactly one");
+
+#[cfg(feature = "bitnum-u64")]
+pub type BitNum = u64;
+#[cfg(all(not(feature = "bitnum-u64"), feature = "bitnum-u128"))]
 pub type BitNum = u128;
+#[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+pub type BitNum = ethnum::U256;
+
+#[cfg(feature = "bitnum-u64")]
+pub const MAX_SIZE: usize = 11;
+#[cfg(all(not(feature = "bitnum-u64"), feature = "bitnum-u128"))]
+pub const MAX_SIZE: usize = 16;
+#[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+pub const MAX_SIZE: usize = 23;
+
+#[cfg(any(feature = "bitnum-u64", feature = "bitnum-u128"))]
+pub const BITNUM_ZERO: BitNum = 0;
+#[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+pub const BITNUM_ZERO: BitNum = BitNum::ZERO;
+#[cfg(any(feature = "bitnum-u64", feature = "bitnum-u128"))]
+pub const BITNUM_ONE: BitNum = 1;
+#[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+pub const BITNUM_ONE: BitNum = BitNum::ONE;
+
+#[cfg(any(feature = "bitnum-u64", feature = "bitnum-u128"))]
+const fn bitnum_get(value: BitNum, i: usize) -> bool { value & (1 << i) != 0 }
+#[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+const fn bitnum_get(value: BitNum, i: usize) -> bool {
+    let (hi, lo) = value.into_words();
+    if i < 128 { lo & (1 << i) != 0 } else { hi & (1 << (i - 128)) != 0 }
+}
+
+#[cfg(any(feature = "bitnum-u64", feature = "bitnum-u128"))]
+const fn bitnum_set(value: BitNum, i: usize) -> BitNum { value | (1 << i) }
+#[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+const fn bitnum_set(value: BitNum, i: usize) -> BitNum {
+    let (mut hi, mut lo) = value.into_words();
+    if i < 128 { lo |= 1 << i } else { hi |= 1 << (i - 128) }
+    BitNum::from_words(hi, lo)
+}
+
+#[cfg(any(feature = "bitnum-u64", feature = "bitnum-u128"))]
+const fn bitnum_unset(value: BitNum, i: usize) -> BitNum { value & !(1 << i) }
+#[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+const fn bitnum_unset(value: BitNum, i: usize) -> BitNum {
+    let (mut hi, mut lo) = value.into_words();
+    if i < 128 { lo &= !(1 << i) } else { hi &= !(1 << (i - 128)) }
+    BitNum::from_words(hi, lo)
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd)]
 pub struct BitVec (pub BitNum);
@@ -22,9 +78,9 @@ pub trait Bits {
         let mut val = self.bits();
         let mut vec = Vec::new();
         loop {
-            vec.push(if val & 1 == 1 { '1' } else { '0' });
+            vec.push(if val & BITNUM_ONE == BITNUM_ONE { '1' } else { '0' });
             val >>= 1;
-            if val == 0 { break }
+            if val == BITNUM_ZERO { break }
             a += 1;
             if a == b { vec.push('_'); b += 1; a = 0; }
         }
@@ -39,10 +95,10 @@ impl Bits for BitNum {
 }
 
 impl BitVec {
-    #[inline] pub const fn new() -> Self { BitVec(0) }
-    #[inline] pub const fn set(&mut self, i: usize) { self.0 |= 1 << i }
-    #[inline] pub const fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
-    #[inline] pub const fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
+    #[inline] pub const fn new() -> Self { BitVec(BITNUM_ZERO) }
+    #[inline] pub const fn set(&mut self, i: usize) { self.0 = bitnum_set(self.0, i) }
+    #[inline] pub const fn unset(&mut self, i: usize) { self.0 = bitnum_unset(self.0, i) }
+    #[inline] pub const fn get(&self, i: usize) -> bool { bitnum_get(self.0, i) }
 }
 
 impl Default for BitVec { fn default() -> Self { Self::new() } }
@@ -61,7 +117,7 @@ pub struct Graph { pub size: usize, pub edges: Triangle }
 
 impl Triangle {
     #[inline]
-    pub const fn empty(_sz: usize) -> Self { Triangle(BitVec(0)) }
+    pub const fn empty(_sz: usize) -> Self { Triangle(BitVec::new()) }
     #[inline]
     pub const fn get(&self, (a, b): Pair) -> bool { self.0.get(index(a, b)) }
     #[inline]
@@ -95,10 +151,10 @@ pub fn rev_index(i: usize) -> Pair {
 }
 
 const EDGE_VECS: [BitNum; MAX_SIZE] = {
-    let mut vecs = [0; MAX_SIZE];
+    let mut vecs = [BITNUM_ZERO; MAX_SIZE];
     let mut i = 0;
     while i < MAX_SIZE {
-        let mut tri = Triangle(BitVec(0));
+        let mut tri = Triangle(BitVec::new());
         let mut j = 0;
         while j < MAX_SIZE {
             if i != j { tri.set((i, j)) }
@@ -114,6 +170,7 @@ const EDGE_VECS: [BitNum; MAX_SIZE] = {
 
 impl Graph {
     pub fn new(size: usize, edges: Triangle ) -> Self {
+        assert!(size <= MAX_SIZE, "graph size {size} exceeds configured maximum {MAX_SIZE}");
         // assert_eq!(edges.0.len(), Graph::triangle(size), "Invalid graph size!");
         Graph { size, edges }
     }
@@ -128,7 +185,8 @@ impl Graph {
     }
     pub const fn triangle(sz: usize) -> usize { sz*(sz-1)/2 }
     pub fn from_fn(size: usize, f: impl Fn(usize, usize) -> bool) -> Self {
-        let mut edges = Triangle(BitVec(0));
+        assert!(size <= MAX_SIZE, "graph size {size} exceeds configured maximum {MAX_SIZE}");
+        let mut edges = Triangle(BitVec::new());
         for b in 1..size { for a in 0..b {
             if f(a, b) { edges.set((a, b)) }
         }}
@@ -136,7 +194,7 @@ impl Graph {
     }
     pub fn unrenumber(&self, p: &Perm) -> Self {
         let size = self.size;
-        let mut edges = Triangle(BitVec(0));
+        let mut edges = Triangle(BitVec::new());
         for b in 1..size { for a in 0..b {
             if self.edges.get((p.apply(a), p.apply(b))) {
                 edges.set((a, b));
@@ -156,7 +214,7 @@ impl Graph {
         self.edges.0.0.count_ones() as usize
     }
     pub fn complement(&self) -> Self {
-        let vec = ((1 << Graph::triangle(self.size)) - 1) ^ self.edges.0.0;
+        let vec = ((BITNUM_ONE << Graph::triangle(self.size)) - BITNUM_ONE) ^ self.edges.0.0;
         Graph { size: self.size, edges: Triangle(BitVec(vec)) }
     }
     #[inline]
@@ -179,12 +237,20 @@ impl fmt::Display for Graph {
 impl Bits for Graph {
     fn bits(&self) -> BitNum { self.edges.bits() }
     fn from_bits(size: usize, bits: BitNum) -> Self {
+        assert!(size <= MAX_SIZE, "graph size {size} exceeds configured maximum {MAX_SIZE}");
         Graph { size, edges: Triangle(BitVec(bits)) }
     }
 }
 
 pub fn random_graph(rng: &mut impl rand::Rng, size: usize) -> Graph {
-    Graph::from_bits(size, rng.gen_range(0..(1 << Graph::triangle(size))))
+    #[cfg(any(feature = "bitnum-u64", feature = "bitnum-u128"))]
+    let bits = rng.gen_range(BITNUM_ZERO..(1 << Graph::triangle(size)));
+    #[cfg(all(not(any(feature = "bitnum-u64", feature = "bitnum-u128")), feature = "bitnum-u256"))]
+    let bits = {
+        let value = BitNum::from_words(rng.r#gen(), rng.r#gen());
+        value & ((BITNUM_ONE << Graph::triangle(size)) - BITNUM_ONE)
+    };
+    Graph::from_bits(size, bits)
 }
 
 
@@ -231,14 +297,58 @@ mod tests {
     }
     #[test]
     fn test_show_bits() {
-        let gr = Graph::from_bits(10, 0);
+        let gr = Graph::from_bits(10, BITNUM_ZERO);
         assert_eq!(gr.edges.show_bits(), "0");
-        let gr = Graph::from_bits(10, 0b1100101);
+        let gr = Graph::from_bits(10, BitNum::from(0b1100101u8));
         assert_eq!(gr.edges.show_bits(), "1_100_10_1");
     }
+
+    const TOP_BIT: BitVec = {
+        let mut bits = BitVec::new();
+        bits.set(Graph::triangle(MAX_SIZE) - 1);
+        bits
+    };
+
+    #[test]
+    fn test_configured_size() {
+        #[cfg(feature = "bitnum-u64")]
+        assert_eq!((BitNum::BITS, MAX_SIZE), (64, 11));
+        #[cfg(feature = "bitnum-u128")]
+        assert_eq!((BitNum::BITS, MAX_SIZE), (128, 16));
+        #[cfg(feature = "bitnum-u256")]
+        assert_eq!((BitNum::BITS, MAX_SIZE), (256, 23));
+        assert!(Graph::triangle(MAX_SIZE) <= BitNum::BITS as usize);
+        assert!(Graph::triangle(MAX_SIZE + 1) > BitNum::BITS as usize);
+    }
+
+    #[test]
+    fn test_max_size_boundary() {
+        let top = Graph::triangle(MAX_SIZE) - 1;
+        assert!(TOP_BIT.get(top));
+        assert_eq!(TOP_BIT.0.count_ones(), 1);
+        let complete = Graph::from_fn(MAX_SIZE, |_, _| true);
+        assert_eq!(complete.edge_count(), Graph::triangle(MAX_SIZE));
+        assert_eq!(complete.degree_of(MAX_SIZE - 1), MAX_SIZE - 1);
+        assert_eq!(complete.complement().edge_count(), 0);
+    }
+
+    #[cfg(feature = "bitnum-u256")]
+    #[test]
+    fn test_u256_decimal_round_trip() {
+        let value: BitNum = BITNUM_ONE << 200usize | BitNum::from(12345u16);
+        assert_eq!(value.to_string().parse::<BitNum>().unwrap(), value);
+    }
+
     #[test]
     fn test_edge_vec() {
-        assert_eq!(EDGE_VECS[10], 0x8002001001002007fe00000000000_u128 as BitNum);
+        for i in 0..MAX_SIZE {
+            for j in 0..MAX_SIZE {
+                if i != j {
+                    assert!(bitnum_get(EDGE_VECS[i], index(i, j)));
+                }
+            }
+            assert_eq!(EDGE_VECS[i].count_ones() as usize, MAX_SIZE - 1);
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::base::{Graph,Bits,BitNum};
+use crate::base::{BITNUM_ONE,Graph,Bits,BitNum};
 use crate::tools;
 use crate::enumerate;
 use dashmap::DashSet;
@@ -29,7 +29,7 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
             for b in 0..hi {
                 // let bit = 1 << b;
                 // let bit = 1 << (hi - 1 - b);
-                let bit = 1 << { let b = b + skew; if b >= hi { b - hi } else { b } };
+                let bit = BITNUM_ONE << { let b = b + skew; if b >= hi { b - hi } else { b } };
                 if grtw.bits() & bit == 0 { continue }
                 let grnext = ce.bits() | bit;
                 // eprintln!("{}: {} -> {}", b, grtw, grnext);

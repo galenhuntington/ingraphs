@@ -21,6 +21,29 @@ analyzing ingraphs.  Some of it could be better documented.
 Graphs are represented by decimal numbers (perhaps not the best system
 but adequate).
 
+### Graph representation width
+
+The integer used to store a graph is selected at compile time with a Cargo
+feature. The default remains `u128`:
+
+| Feature | Integer | Maximum vertices |
+| :--- | :--- | ---: |
+| `bitnum-u64` | `u64` | 11 |
+| `bitnum-u128` | `u128` | 16 |
+| `bitnum-u256` | `ethnum::U256` | 23 |
+
+Build the default configuration normally, or disable the default feature when
+selecting another width:
+
+```sh
+cargo build
+cargo build --no-default-features --features bitnum-u64
+cargo build --no-default-features --features bitnum-u256
+```
+
+Exactly one width feature must be enabled. Decimal graph input and output is
+the same in every configuration.
+
 ## Some graphs
 
 Here are numeric representations of some graphs mentioned in the
