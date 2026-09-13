@@ -1,7 +1,7 @@
 This is code for my article [Dense Universal
 Ingraphs](https://galen.xyz/ingraphs/).  It provides several tools
-for working on this problem.  It is written in Rust, and is quite
-rough, but usable.
+for working on this problem.  It is written in Rust with some C,
+and is quite rough, but usable.
 
 ## Problem
 

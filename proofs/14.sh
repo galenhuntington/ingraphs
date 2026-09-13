@@ -4,6 +4,6 @@ graphy ingraph-seek --expiration 0 --bailout 0 --seeds 1933816226229231797934489
 graphy successors 14 <(graphy successors 14 output/g14a.csv) > output/g14b.csv
 # ~90s -> 701 graphs
 graphy ingraph-seek --seeds 19074181028894680391267213,4534579169160037694685121,19111969188635342448231609,19074761745787876439101217,38676472170665326401290238,19045232524291419991179271,9385956373809257868125953,19045265112462908685107233 --bailout 0 14 output/g14b.csv | grep None > output/g14c.csv
-# -> 30 graphs, current best set
+# -> 28 graphs, current best set
 graphy ingraph-seek --seeds 9377372077228526537092868 14 <(graphy successors 14 output/g14c.csv) | grep None
 # -> no graphs with 18 edges
