@@ -6,8 +6,15 @@ use crate::perm::*;
 use std::fmt;
 
 type Pair = (usize, usize);
-// BitNum can be u64 if graphs' max size is 11
+
+#[cfg(feature = "u64")]
+pub const MAX_SIZE: usize = 11;
+#[cfg(not(feature = "u64"))]
 pub const MAX_SIZE: usize = 16;
+
+#[cfg(feature = "u64")]
+pub type BitNum = u64;
+#[cfg(not(feature = "u64"))]
 pub type BitNum = u128;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd)]
@@ -107,8 +114,6 @@ const EDGE_VECS: [BitNum; MAX_SIZE] = {
         vecs[i] = tri.0.0;
         i += 1;
     }
-    /*
-*/
     vecs
 };
 
@@ -126,7 +131,7 @@ impl Graph {
     pub fn has_edge_raw(&self, a: usize, b: usize) -> bool {
         self.edges.get((a, b))
     }
-    pub const fn triangle(sz: usize) -> usize { sz*(sz-1)/2 }
+    pub const fn triangle(sz: usize) -> usize { sz*sz.wrapping_sub(1)/2 } // sz=0 is dubious but used
     pub fn from_fn(size: usize, f: impl Fn(usize, usize) -> bool) -> Self {
         let mut edges = Triangle(BitVec(0));
         for b in 1..size { for a in 0..b {

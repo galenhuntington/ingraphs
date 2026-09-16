@@ -2,10 +2,25 @@
 name = "graphy"
 version = "0.1.0"
 edition = "2024"
+# this doesn't work with [[bin]] below
+# autobins = true
+
+# [[bin]]
+# name = "graphy"
+# path = "src/main.rs"
+
+# Warns me about same path.
+# [[bin]]
+# name = "graphy-u64"
+# path = "src/main.rs"
+# required-features = ["u64"]
 
 [profile.release]
 lto = true
 codegen-units = 1
+
+[features]
+u64 = []
 
 [dependencies]
 auto_ops = "0.3.0"

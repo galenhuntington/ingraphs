@@ -4,7 +4,7 @@ use crate::tools::one_bits;
 use crate::perm::Perm;
 use std::cmp::Ordering::*;
 
-struct Fixed<'a, CB: FnMut(base::BitNum)> {
+struct Fixed<'a, CB: FnMut(BitNum)> {
     pub size: usize,
     pub line: &'a mut Vec<BitNum>,
     pub callback: CB,
@@ -228,7 +228,7 @@ pub fn to_best(gr: &Graph) -> Graph {
 }
 
 fn recurse(
-    fixed: &mut Fixed<impl FnMut(base::BitNum)>,
+    fixed: &mut Fixed<impl FnMut(BitNum)>,
     Recursed { at, break_bits, so_far, recheck }: Recursed,
 ) {
     let offset = base::Graph::triangle(at);
@@ -297,7 +297,7 @@ fn recurse(
     }
 }
 
-pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: impl FnMut(base::BitNum)) {
+pub fn enumerate_graphs(size: usize, range: Option<(usize, usize)>, callback: impl FnMut(BitNum)) {
     enumerate_subtree(size, range, &[], callback)
 }
 
@@ -305,7 +305,7 @@ pub fn enumerate_subtree(
     size: usize,
     range: Option<(usize, usize)>,
     prefix: &[BitNum],
-    callback: impl FnMut(base::BitNum),
+    callback: impl FnMut(BitNum),
 ) {
     if size == 0 { return }
     recurse(
@@ -325,7 +325,7 @@ pub fn enumerate_subtree(
     );
 }
 
-pub fn enumerate_middle(size: usize, mut callback: impl FnMut(base::BitNum)) {
+pub fn enumerate_middle(size: usize, mut callback: impl FnMut(BitNum)) {
     let half = Graph::triangle(size) / 2;
     enumerate_graphs(size, Some((half, half)), move |bn| {
         let grc = Graph::from_bits(size, bn).complement();
@@ -353,14 +353,12 @@ mod tests {
         assert_eq!(smoosh(0b_101_01_0, 0b1_01_0), 0b_10_10_1);
     }
 
-    /*
     #[test]
     fn test_enumerate_graphs() {
         let mut count = 0;
-        enumerate_graphs(3, None, |_| count += 1);
-        assert_eq!(count, MAX_SIZE);
+        enumerate_graphs(7, None, |_| count += 1);
+        assert_eq!(count, 1044);
     }
-    */
 
     #[test]
     fn test_best_symmetric() {
@@ -403,3 +401,4 @@ mod tests {
         }
     }
 }
+
