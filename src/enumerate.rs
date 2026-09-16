@@ -1,5 +1,5 @@
 use crate::base;
-use crate::base::{BitNum,BitVec,Graph,Triangle,Bits};
+use crate::base::{BitNum,BitVec,Graph,Triangle,Bits,MAX_SIZE};
 use crate::tools::one_bits;
 use crate::perm::Perm;
 use std::cmp::Ordering::*;
@@ -123,7 +123,7 @@ impl RVal for BitNum {
 // Adjacency of v among all vertices, from the triangle bits
 fn vert_mask(tri: &Triangle, v: usize) -> u32 {
     let mut m = 0u32;
-    for u in 0..16 {
+    for u in 0..MAX_SIZE {
         if u != v && tri.get((u, v)) { m |= 1 << u }
     }
     m
@@ -148,8 +148,8 @@ fn new_recurse<T: RVal>(
     let mut best = T::score(cur);
     // vertices already recursed on, for twin skipping; masks computed lazily
     // so nodes with a single surviving branch pay nothing
-    let mut tried_v = [0usize; 16];
-    let mut tried_m = [0u32; 16];
+    let mut tried_v = [0usize; MAX_SIZE];
+    let mut tried_m = [0u32; MAX_SIZE];
     let mut tried_ct = 0;
     let mut masks_done = 0;
     'swaps: for swap in (0..=pt).rev() {
@@ -358,7 +358,7 @@ mod tests {
     fn test_enumerate_graphs() {
         let mut count = 0;
         enumerate_graphs(3, None, |_| count += 1);
-        assert_eq!(count, 16);
+        assert_eq!(count, MAX_SIZE);
     }
     */
 

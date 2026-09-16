@@ -6,7 +6,7 @@ pub mod enumerate;
 pub mod seek;
 pub mod progress;
 
-use base::{Graph,BitNum,Bits};
+use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::BTreeSet;
 use clap::{Parser,Subcommand};
 use std::time::{Instant,Duration};
@@ -43,7 +43,7 @@ pub fn run_graphs(_size: usize) {
 }
 
 fn stats(path: String) {
-    let size = 16; // upper bound; largest we support
+    let size = MAX_SIZE; // upper bound; largest we support
     let all = tools::read_graphs::<BitNum>(size, &path);
     let mut counts = vec![0; Graph::triangle(size) + 1];
     for bn in all {

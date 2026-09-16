@@ -4,7 +4,7 @@
     This is extracted from a larger module in another project.
 */
 
-use crate::base::{BitNum,Graph,Bits,rev_hi_index};
+use crate::base::{BitNum,Graph,Bits,rev_hi_index,MAX_SIZE};
 use crate::perm::{Perm,all_perms};
 use crate::enumerate;
 use std::cmp::Reverse;
@@ -55,7 +55,7 @@ pub fn infer_graph(edges: BitNum) -> Graph {
 pub fn parse_graph6(line: &str) -> BitNum {
     let bytes = line.as_bytes();
     let n = (bytes[0] - 63) as usize;
-    assert!(n <= 16, "graph6 too large (or multi-byte size): {}", line);
+    assert!(n <= MAX_SIZE, "graph6 too large (or multi-byte size): {}", line);
     let tri = Graph::triangle(n);
     assert_eq!(bytes.len(), 1 + tri.div_ceil(6), "Bad graph6 line: {}", line);
     let mut edges: BitNum = 0;
@@ -105,9 +105,9 @@ pub fn naive_find_best(gr: &Graph) -> Graph {
 // Backtracking count of color- and adjacency-preserving bijections
 struct AutCount<'a> {
     verts: &'a [usize],
-    adj: &'a [u32; 16],
+    adj: &'a [u32; MAX_SIZE],
     color: &'a [usize],
-    img: [usize; 16],
+    img: [usize; MAX_SIZE],
     used: u32,
 }
 
@@ -202,13 +202,13 @@ pub fn count_symmetries(gr: &Graph) -> usize {
     let mut verts = vs;
     verts.sort_by_key(|&v| (class_size[&color[v]], color[v], v));
 
-    let mut quot_adj = [0u32; 16];
+    let mut quot_adj = [0u32; MAX_SIZE];
     for &v in &verts { quot_adj[v] = adj[v] & alive }
     let mut ac = AutCount {
         verts: &verts,
         adj: &quot_adj,
         color: &color,
-        img: [usize::MAX; 16],
+        img: [usize::MAX; MAX_SIZE],
         used: 0,
     };
     mult * ac.go(0)
@@ -232,8 +232,8 @@ impl IIResult for Option<Perm> {
 }
 
 // Neighbor masks, indexed by vertex
-fn adj_masks(gr: &Graph) -> [u32; 16] {
-    let mut adj = [0u32; 16];
+fn adj_masks(gr: &Graph) -> [u32; MAX_SIZE] {
+    let mut adj = [0u32; MAX_SIZE];
     let mut bits = gr.bits();
     while bits != 0 {
         let i = bits.trailing_zeros() as usize;
@@ -247,23 +247,23 @@ fn adj_masks(gr: &Graph) -> [u32; 16] {
 
 struct Isso<'a> {
     sub_sorted: &'a [(usize, usize)],
-    sub_adj: [u32; 16],
-    sup_adj: [u32; 16],
-    sup_deg: [usize; 16],
+    sub_adj: [u32; MAX_SIZE],
+    sup_adj: [u32; MAX_SIZE],
+    sup_deg: [usize; MAX_SIZE],
     // sup slots in descending-degree order, tried in this order
-    sup_order: [usize; 16],
+    sup_order: [usize; MAX_SIZE],
     // for each sub vertex, the sup slots its already-placed neighbors occupy
-    req: [u32; 16],
+    req: [u32; MAX_SIZE],
     // sup slot -> sub vertex
-    vec: [usize; 16],
+    vec: [usize; MAX_SIZE],
     // sub vertex -> its sup slot (valid once assigned)
-    img: [usize; 16],
+    img: [usize; MAX_SIZE],
     // interchangeable predecessor in matching order, else UNFILLED; el's
     // image is forced above its predecessor's, killing twin permutations
-    twin_pred: [usize; 16],
+    twin_pred: [usize; MAX_SIZE],
     // interchangeable earlier (in sup_order) sup slot: while it is unused,
     // this slot is redundant to try
-    sup_twin_pred: [usize; 16],
+    sup_twin_pred: [usize; MAX_SIZE],
     used: u32,
     size: usize,
 }
@@ -325,16 +325,16 @@ impl Isso<'_> {
 pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> T {
     let size = sub.size;
     let sup_adj = adj_masks(sup);
-    let mut sup_deg = [0; 16];
+    let mut sup_deg = [0; MAX_SIZE];
     for j in 0..size { sup_deg[j] = sup_adj[j].count_ones() as usize }
-    let mut sup_order = [0; 16];
+    let mut sup_order = [0; MAX_SIZE];
     for j in 0..size { sup_order[j] = j }
     sup_order[..size].sort_unstable_by_key(|&j| Reverse(sup_deg[j]));
     let sub_adj = adj_masks(sub);
     // chain interchangeable vertices (swapping them is an automorphism)
     // in matching order; correcting swaps always terminate, so demanding
     // ascending images along each chain loses no embeddings
-    let mut twin_pred = [UNFILLED; 16];
+    let mut twin_pred = [UNFILLED; MAX_SIZE];
     for i in 1..size {
         let el = sub_sorted[i].1;
         for k in (0..i).rev() {
@@ -346,7 +346,7 @@ pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: 
             }
         }
     }
-    let mut sup_twin_pred = [UNFILLED; 16];
+    let mut sup_twin_pred = [UNFILLED; MAX_SIZE];
     for jx in 1..size {
         let j = sup_order[jx];
         for kx in (0..jx).rev() {
@@ -366,9 +366,9 @@ pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: 
         sup_adj,
         sup_deg,
         sup_order,
-        req: [0; 16],
-        vec: [UNFILLED; 16],
-        img: [UNFILLED; 16],
+        req: [0; MAX_SIZE],
+        vec: [UNFILLED; MAX_SIZE],
+        img: [UNFILLED; MAX_SIZE],
         twin_pred,
         sup_twin_pred,
         used: 0,
@@ -432,7 +432,7 @@ pub fn build_sorted_row(gr: &Graph) -> Vec<(usize, usize)> {
     row
 }
 
-fn comps_grow(adj: &[u32; 16], mask: u32, size: usize) -> u32 {
+fn comps_grow(adj: &[u32; MAX_SIZE], mask: u32, size: usize) -> u32 {
     let mut out = mask;
     for u in 0..size {
         if mask & (1 << u) != 0 { out |= adj[u] }
