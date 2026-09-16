@@ -3,6 +3,9 @@ Ingraphs](https://galen.xyz/ingraphs/).  It provides several tools
 for working on this problem.  It is written in Rust with some C,
 and is quite rough, but usable.
 
+In the `proofs` directory are instructions for verifying the claims
+in the article.
+
 ## Problem
 
 A universal ingraph for _n_ is a graph G such that for any graph H
