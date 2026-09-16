@@ -13,8 +13,8 @@ use utc_dt::UTCDatetime;
 use std::collections::{BTreeMap,BTreeSet};
 
 #[inline]
-pub fn factorial(n: usize) -> usize {
-    (1..=n).product()
+pub fn factorial(n: usize) -> u128 {
+    (1 ..= n as u128).product()
 }
 
 #[inline]
@@ -112,7 +112,7 @@ struct AutCount<'a> {
 }
 
 impl AutCount<'_> {
-    fn go(&mut self, i: usize) -> usize {
+    fn go(&mut self, i: usize) -> u128 {
         if i == self.verts.len() { return 1 }
         let v = self.verts[i];
         let mut total = 0;
@@ -137,14 +137,14 @@ impl AutCount<'_> {
 // classes) contribute a full symmetric group, exactly; collapse them to one
 // colored representative and count the (small) quotient's automorphisms by
 // refinement plus backtracking.
-pub fn count_symmetries(gr: &Graph) -> usize {
-    if gr.size <= 2 { return gr.size }
+pub fn count_symmetries(gr: &Graph) -> u128 {
+    if gr.size <= 2 { return gr.size as u128 }
     let n = gr.size;
     let adj = adj_masks(gr);
     let mut alive: u32 = (1 << n) - 1;
     let mut color = vec![0usize; n];
     let mut next_color = 1;
-    let mut mult: usize = 1;
+    let mut mult: u128 = 1;
 
     // collapse twin classes (open: same neighborhood; closed: same closed
     // neighborhood) until none remain; classes of equal prior color, size,
@@ -525,7 +525,7 @@ mod tests {
         for _ in 0 .. 300 {
             let size = rng.gen_range(2..=9);
             let gr = random_graph(rng, size);
-            assert_eq!(count_symmetries(&gr), count_symmetries_slow(&gr), "{}", gr);
+            assert_eq!(count_symmetries(&gr) as usize, count_symmetries_slow(&gr), "{}", gr);
         }
     }
     #[test]
@@ -546,7 +546,7 @@ mod tests {
                 grs.push(Graph::from_fn(size, |a, b| (a + b) % 3 == k));
             }
             for gr in grs {
-                assert_eq!(count_symmetries(&gr), count_symmetries_slow(&gr), "{}", gr);
+                assert_eq!(count_symmetries(&gr) as usize, count_symmetries_slow(&gr), "{}", gr);
             }
         }
     }

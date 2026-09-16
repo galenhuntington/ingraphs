@@ -236,7 +236,7 @@ fn free_close(sub: &Graph, seeds: impl Iterator<Item=Graph>) {
 }
 
 // Counts: modulo complements and symmetries, modulo symmetries, "labelled"
-fn miss_counts(gr: &Graph) -> (usize, usize, usize) {
+fn miss_counts(gr: &Graph) -> (usize, usize, u128) {
     let all = read::<BitNum>(gr.size);
     let half = match Graph::triangle(gr.size) {
         x if x % 2 == 0 => Some(x / 2),
