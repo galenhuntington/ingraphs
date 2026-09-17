@@ -11,16 +11,25 @@ carrying its own group (symmetric, cyclic, dihedral).  For the block,
 the diagonal group ranges over S_k and cyclic/dihedral subgroups (plus a
 pair-complementation extension); every union of the resulting edge
 orbits with edge count in [min,max] is emitted as a graphy number.
-Dedupe with graphy canon afterwards:
+The optional cyclic family uses one permutation of each cycle type,
+including full circulants and coupled rotations of several blocks.
+Actions exceeding --max-orbits (default 18) are skipped, so generation
+is not exhaustive over all graphs with symmetries.
 
-  ./scripts/orbitals.py 14 40 51 | ./target/release/graphy canon 14 /dev/stdin | sort -un
+For fast isomorphism deduplication, output graph6 to nauty's labelg:
+  python3 scripts/orbitals.py 14 35 45 --family cyclic --graph6 \
+    | labelg -q | sort -u > output/cyclic14.g6
+
+graphy reads graph6 directly. To get graphy's canonical decimal labels,
+use graphy canon on the deduplicated library (or just on useful refuters).
+The original three positional arguments still select the layered family.
 """
 
-import sys
-from itertools import combinations, permutations
+import argparse
+from itertools import combinations
 
-n_target = int(sys.argv[1])
-emin, emax = int(sys.argv[2]), int(sys.argv[3])
+from refuter_variants import graph6
+
 MAX_ORBITS = 18
 MAX_LAYERS = 5
 MAX_PARTS = 2
@@ -29,9 +38,13 @@ def idx(a, b):
     if a > b: a, b = b, a
     return b*(b-1)//2 + a
 
-emitted = set()
+def edge_orbits(nverts, generators):
+    """Unordered-pair orbits, using generators without closing the group.
 
-def emit_orbit_unions(nverts, group_perms):
+    Traversing the generator edges reaches exactly the generated-group orbit:
+    an inverse permutation is a positive power of that permutation. The group
+    itself can be enormous even when this traversal has only C(n,2) states.
+    """
     orbit_of = {}
     orbits = []
     for b in range(1, nverts):
@@ -43,46 +56,33 @@ def emit_orbit_unions(nverts, group_perms):
                 (x, y) = stack.pop()
                 if (x, y) in o: continue
                 o.add((x, y))
-                for p in group_perms:
+                for p in generators:
                     px, py = p[x], p[y]
                     if px > py: px, py = py, px
                     if (px, py) not in o: stack.append((px, py))
             for e in o: orbit_of[e] = len(orbits)
             orbits.append(sorted(o))
-    if len(orbits) > MAX_ORBITS: return
-    sizes = [len(o) for o in orbits]
-    nums = [sum(1 << idx(a, b) for (a, b) in o) for o in orbits]
-    # meet-in-the-middle would be overkill; orbit counts are small
-    for pick in range(1, 1 << len(orbits)):
-        e = 0
-        for i in range(len(orbits)):
-            if pick >> i & 1: e += sizes[i]
-        if emin <= e <= emax:
-            g = 0
-            for i in range(len(orbits)):
-                if pick >> i & 1: g |= nums[i]
-            if g not in emitted:
-                emitted.add(g)
-                print(g)
+    return tuple(sorted(sum(1 << idx(a, b) for a, b in o) for o in orbits))
 
-groups_done = set()
 
-def close_group(nverts, gens):
-    ident = tuple(range(nverts))
-    group = {ident}
-    frontier = [ident]
-    while frontier:
-        q = frontier.pop()
-        for g in gens:
-            ng = tuple(g[q[i]] for i in range(nverts))
-            if ng not in group:
-                group.add(ng)
-                frontier.append(ng)
-        if len(group) > 20000: return None
-    key = frozenset(group)
-    if key in groups_done: return None
-    groups_done.add(key)
-    return sorted(group)
+def orbit_unions(orbits, emin, emax):
+    """Enumerate unions, pruning branches outside the requested edge range."""
+    orbits = sorted(orbits, key=int.bit_count, reverse=True)
+    sizes = [o.bit_count() for o in orbits]
+    remaining = [0] * (len(orbits) + 1)
+    for i in range(len(orbits) - 1, -1, -1):
+        remaining[i] = remaining[i + 1] + sizes[i]
+
+    def visit(i, bits, edges):
+        if edges > emax or edges + remaining[i] < emin:
+            return
+        if i == len(orbits):
+            yield bits
+            return
+        yield from visit(i + 1, bits, edges)
+        yield from visit(i + 1, bits | orbits[i], edges + sizes[i])
+
+    yield from visit(0, 0, 0)
 
 def apply_elem(p, el):
     if isinstance(el, frozenset):
@@ -160,46 +160,126 @@ def compositions(sizes, remaining, start):
 def pad(mapping, nverts):
     return tuple(mapping.get(v, v) for v in range(nverts))
 
-# block of subset-layers of [k] + independent parts (sizes 1..7)
-for k in range(3, 6):
-    kinds = sk_layer_kinds(k)
-    layer_sizes = [s for s, _ in kinds]
-    for nblock in range(0, n_target + 1):
-        block_comps = list(compositions(layer_sizes, nblock, 0)) \
-            if nblock > 0 else [[]]
-        for bc in block_comps:
-            if len(bc) > MAX_LAYERS: continue
-            if nblock == 0 and k > 3: continue  # parts-only: do once
-            layers = [kinds[i] for i in bc]
-            base = []
-            for li, (_, els) in enumerate(layers):
-                base += [(li, el) for el in els]
-            base_index = {v: i for i, v in enumerate(base)}
-            bgen_sets = block_perm_generators(k, layers, base_index, base) \
-                if nblock > 0 else [[]]
-            # independent parts filling the rest
-            rest = n_target - nblock
-            for pc in compositions(list(range(1, 8)), rest, 0) if rest else [[]]:
-                if len(pc) > MAX_PARTS: continue
-                if len(bc) + len(pc) > MAX_LAYERS: continue
-                part_sizes = [p+1 for p in pc]
-                part_offsets = []
-                off = nblock
-                for m in part_sizes:
-                    part_offsets.append((m, off))
-                    off += m
-                pgen_choices = [part_generator_sets(m, o)
-                                for (m, o) in part_offsets]
-                def rec(i, gens):
-                    if i == len(pgen_choices):
-                        for bg in bgen_sets:
-                            allg = [pad(dict(enumerate(t)), n_target)
-                                    for t in bg] \
-                                 + [pad(m, n_target) for m in gens]
-                            grp = close_group(n_target, allg) \
-                                if allg else None
-                            if grp: emit_orbit_unions(n_target, grp)
-                        return
-                    for gs in pgen_choices[i]:
-                        rec(i + 1, gens + gs)
-                rec(0, [])
+def layered_actions(n_target):
+    # Subset-layers of [k] + independent parts (sizes 1..7).
+    for k in range(3, 6):
+        kinds = sk_layer_kinds(k)
+        layer_sizes = [s for s, _ in kinds]
+        for nblock in range(0, n_target + 1):
+            block_comps = compositions(layer_sizes, nblock, 0)
+            for bc in block_comps:
+                if len(bc) > MAX_LAYERS: continue
+                if nblock == 0 and k > 3: continue
+                layers = [kinds[i] for i in bc]
+                base = []
+                for li, (_, els) in enumerate(layers):
+                    base += [(li, el) for el in els]
+                base_index = {v: i for i, v in enumerate(base)}
+                bgen_sets = block_perm_generators(k, layers, base_index, base) \
+                    if nblock > 0 else [[]]
+                rest = n_target - nblock
+                for pc in compositions(list(range(1, 8)), rest, 0):
+                    if len(pc) > MAX_PARTS: continue
+                    if len(bc) + len(pc) > MAX_LAYERS: continue
+                    part_sizes = [p+1 for p in pc]
+                    part_offsets = []
+                    off = nblock
+                    for m in part_sizes:
+                        part_offsets.append((m, off))
+                        off += m
+                    pgen_choices = [part_generator_sets(m, o)
+                                    for (m, o) in part_offsets]
+                    def rec(i, gens):
+                        if i == len(pgen_choices):
+                            for bg in bgen_sets:
+                                allg = [pad(dict(enumerate(t)), n_target)
+                                        for t in bg] \
+                                     + [pad(m, n_target) for m in gens]
+                                if allg:
+                                    yield allg
+                            return
+                        for gs in pgen_choices[i]:
+                            yield from rec(i + 1, gens + gs)
+                    yield from rec(0, [])
+
+
+def cyclic_actions(n, cycles=None):
+    """One permutation of every cycle type, including a full n-cycle.
+
+    Multiple cycles rotate together, so cross-block edges may be matchings
+    or shifted matchings, not just complete or empty bipartite graphs. Up to
+    relabelling, this covers every cyclic subgroup action on n vertices.
+    """
+    if cycles is not None and (not cycles or min(cycles) < 1 or sum(cycles) != n):
+        raise ValueError("cycle lengths must be positive and sum to n")
+    cycle_types = [cycles] if cycles is not None else (
+        [part + 1 for part in composition]
+        for composition in compositions(list(range(1, n + 1)), n, 0)
+    )
+    for cycle_type in cycle_types:
+        perm = list(range(n))
+        offset = 0
+        for size in cycle_type:
+            for v in range(size):
+                perm[offset + v] = offset + (v + 1) % size
+            offset += size
+        yield [tuple(perm)]
+
+
+def generate(n, emin, emax, family="layers", max_orbits=MAX_ORBITS, cycles=None):
+    partitions_done = set()
+    emitted = set()
+    families = []
+    if family in ("layers", "all"):
+        families.append(layered_actions(n))
+    if family in ("cyclic", "all"):
+        families.append(cyclic_actions(n, cycles))
+    for actions in families:
+        for generators in actions:
+            orbits = edge_orbits(n, generators)
+            if len(orbits) > max_orbits or orbits in partitions_done:
+                continue
+            # Different groups with the same pair-orbit partition generate
+            # exactly the same graphs; the partition is all we need to cache.
+            partitions_done.add(orbits)
+            for bits in orbit_unions(orbits, emin, emax):
+                if bits not in emitted:
+                    emitted.add(bits)
+                    yield bits
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("n", type=int)
+    parser.add_argument("min_edges", type=int)
+    parser.add_argument("max_edges", type=int)
+    parser.add_argument("--family", choices=("layers", "cyclic", "all"), default="layers")
+    parser.add_argument("--max-orbits", type=int, default=MAX_ORBITS)
+    parser.add_argument("--cycles", help="restrict --family cyclic to one cycle type, e.g. 6,6,2")
+    parser.add_argument("--graph6", action="store_true",
+                        help="output graph6 for fast deduplication with labelg -q | sort -u")
+    args = parser.parse_args()
+    if not 1 <= args.n <= 62:
+        parser.error("n must be between 1 and 62")
+    if not 0 <= args.min_edges <= args.max_edges <= args.n * (args.n - 1) // 2:
+        parser.error("invalid edge range")
+    if args.max_orbits < 0:
+        parser.error("max-orbits must be nonnegative")
+    cycles = None
+    if args.cycles is not None:
+        if args.family != "cyclic":
+            parser.error("--cycles requires --family cyclic")
+        try:
+            cycles = list(map(int, args.cycles.split(",")))
+        except ValueError:
+            parser.error("--cycles must be comma-separated integers")
+        if min(cycles) < 1 or sum(cycles) != args.n:
+            parser.error("cycle lengths must be positive and sum to n")
+    for bits in generate(args.n, args.min_edges, args.max_edges,
+                         args.family, args.max_orbits, cycles):
+        print(graph6(args.n, bits) if args.graph6 else bits)
+
+
+if __name__ == "__main__":
+    main()
