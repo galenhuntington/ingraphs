@@ -243,8 +243,8 @@ def generate(n, emin, emax, family="layers", max_orbits=MAX_ORBITS, cycles=None)
             # exactly the same graphs; the partition is all we need to cache.
             partitions_done.add(orbits)
             for bits in orbit_unions(orbits, emin, emax):
-                if bits not in emitted:
-                    emitted.add(bits)
+                # if bits not in emitted:
+                    # emitted.add(bits)
                     yield bits
 
 
