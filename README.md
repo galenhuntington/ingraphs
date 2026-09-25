@@ -24,6 +24,81 @@ analyzing ingraphs.  Some of it could be better documented.
 Graphs are represented by decimal numbers (perhaps not the best system
 but adequate).
 
+### Building and native canonicalization
+
+`cargo build --release` now builds a pinned, bundled nauty 2.9.3 backend
+for internal isomorphism keys. Native builds on POSIX systems require a
+C11 compiler, `sh`, and the usual configure utilities. Cargo configures
+the bundled headers in its build directory and links the C code statically;
+there is no make step, libclang/bindgen requirement, download during the
+build, or dependency on the separately built `nauty-prune` directory.
+
+For a binary tuned to the build machine:
+
+```sh
+cargo build --release --features native
+```
+
+Release C compilation already uses `-O3`; `native` adds `-march=native` to
+the C backend. Such binaries may not run on older/different CPUs. This
+feature does not change Rust's target CPU; set `RUSTFLAGS='-C target-cpu=native'`
+too if desired. `CC` and `CFLAGS` retain their normal `cc`-crate meanings.
+The actual C command is recorded in
+`target/release/build/graphy-*/out/nauty/compiler.txt`.
+
+`cargo build --release --no-default-features` selects the pure-Rust
+canonical-key fallback and needs no C toolchain; this is also the current
+option for cross-compilation or non-POSIX targets. The existing `u64`
+feature can be combined with either backend.
+
+`successors` normalizes every input graph into an exact native key, so its
+input may use graphy's minimum-decimal labels, arbitrary decimal labels,
+or graph6 from `geng`/`labelg`. It stops checking an extension at its first
+missing retraction. Output still uses minimum-decimal CSV, but its ordering
+may change. For chained calls, `--internal-labels` skips conversion back to
+minimum-decimal form on intermediate output; the next call accepts those
+labels directly. This avoids making the legacy canonicalizer the output
+bottleneck. Omit the flag on the last stage if minimum-decimal output is wanted.
+`--max` retains the older, minimum-decimal-order-based path and conflicts
+with `--internal-labels`.
+`canon`, `enumerate`, `extend`, and `retract` retain their original semantics.
+The minimum-decimal canonicalizer now tries a degree-ordered relabeling as
+an initial upper bound (only if its integer is smaller), before the unchanged
+exact search. This greatly reduces conversion costs for many nauty-labeled
+graphs with isolated vertices; it does not change the minimum sought.
+
+`seek()` and the search phase of `ingraph-seek` use exact native keys too,
+while keeping working graph labels separate. Only a returned witness is
+converted to minimum-decimal form. The matcher-only seed phase is unchanged.
+For repeatable bounded experiments:
+
+```sh
+RAYON_NUM_THREADS=1 target/release/graphy ingraph-seek 14 output/batches/all14 \
+    --bailout 3000 --rng-seed 20260924
+```
+
+A fixed seed and one worker give the same traversal with either key backend.
+Multiple workers remain scheduling-dependent. The bailout is a soft cap on
+distinct cached states (concurrent insertions can overshoot slightly); hitting
+it now cancels sibling branches. **`None` from a bounded run is inconclusive,**
+not a universality certificate. `--bailout 0` still skips the search.
+
+Orbital generation streams without retaining emitted graphs. A useful
+heuristic-library pipeline is:
+
+```sh
+python3 scripts/orbitals.py 14 32 45 --family all --max-orbits 25 --graph6 \
+    | labelg -q | uniqg -cq > output/orbitals14.g6
+```
+
+`--family all` includes layered actions as well as cyclic ones; a smaller
+orbit cap can therefore recover graphs requiring a higher cyclic cap. It
+can still take a long time and is not exhaustive. `uniqg -c` trusts already
+canonical input and uses SHA-256 fingerprints; for exact full-key comparisons
+use `awk '!x[$0]++'` after `labelg`. Both deduplicators have growing memory
+use, even though their output streams. They are not the exhaustive search's
+visited-state implementation, which always uses exact packed graph keys.
+
 ## Some graphs
 
 Here are numeric representations of some graphs mentioned in the

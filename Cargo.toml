@@ -20,7 +20,15 @@ lto = true
 codegen-units = 1
 
 [features]
+default = ["nauty"]
+# Exact native isomorphism keys; disable for the pure-Rust fallback.
+nauty = ["dep:cc"]
+# Optimize the C backend for the build machine (not a portable binary).
+native = ["nauty"]
 u64 = []
+
+[build-dependencies]
+cc = { version = "1.2.0", optional = true }
 
 [dependencies]
 auto_ops = "0.3.0"
@@ -32,4 +40,3 @@ utc-dt = "0.3.0"
 clap = { version = "4.5.28", features = ["derive"] }
 rayon = "1.10.0"
 dashmap = "6.1.0"
-

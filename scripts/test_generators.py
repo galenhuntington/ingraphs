@@ -1,9 +1,12 @@
 """Run with: python3 -m unittest discover -s scripts -p 'test_*.py'."""
 
 import itertools
+import random
 import unittest
+from unittest.mock import patch
 
 import orbitals
+import template14
 from refuter_variants import edge_index, graph6, variants
 
 
@@ -70,8 +73,74 @@ class OrbitalTests(unittest.TestCase):
         # Identity is among the cycle types, if its orbit count is permitted.
         self.assertEqual(set(orbitals.generate(4, 0, 6, "cyclic")), set(range(64)))
 
+    def test_streaming_does_not_cache_emitted_graphs(self):
+        # Identical partitions are skipped, but the empty graph from two
+        # distinct partitions must be emitted twice (no growing graph set).
+        actions = [[(1, 2, 0)], [(1, 2, 0)], [(0, 1, 2)]]
+        with patch.object(orbitals, "layered_actions", return_value=actions):
+            self.assertEqual(list(orbitals.generate(3, 0, 0)), [0, 0])
+
+
+class TemplateTests(unittest.TestCase):
+    SEEDS = (19045246657205181093300321, 9385953849291249642658467,
+             19045265114045039286486176)
+
+    def assert_template(self, bits):
+        edge = lambda u, v: template14.edge(bits, u, v)
+        self.assertEqual(bits.bit_count(), 45)
+        self.assertFalse(edge(12, 13))
+        for v in range(12):
+            self.assertEqual(edge(12, v), v < 6)
+            self.assertEqual(edge(13, v), v < 6)
+        for a, b in itertools.combinations(range(6), 2):
+            self.assertNotEqual(edge(a, b), edge(a + 6, b + 6))
+        for a in range(6):
+            self.assertEqual(sum(edge(a, b) for b in range(6, 12)), 3)
+        for b in range(6, 12):
+            self.assertEqual(sum(edge(a, b) for a in range(6)), 3)
+
+    def test_recognition_and_moves_preserve_template(self):
+        for seed in self.SEEDS:
+            root = template14.normalize_seed(seed)
+            self.assert_template(root)
+            adjacent = list(template14.neighbors(root))
+            self.assertEqual(len(adjacent), len(set(adjacent)))
+            for bits in adjacent:
+                self.assert_template(bits)
+                self.assertIn((bits ^ root).bit_count(), (2, 4))
+                self.assertIn(root, template14.neighbors(bits))
+        with self.assertRaises(ValueError):
+            template14.normalize_seed(0)
+
+    def test_breadth_first_bounds(self):
+        roots = [template14.normalize_seed(s) for s in self.SEEDS]
+        self.assertEqual(list(template14.explore(self.SEEDS, 0)), roots)
+        self.assertEqual(len(list(template14.explore(self.SEEDS, 3, 7))), 7)
+        actual = list(template14.explore(self.SEEDS[:1], 2))
+        self.assertEqual(len(actual), len(set(actual)))
+        root = roots[0]
+        expected = {root, *template14.neighbors(root)}
+        expected.update(g for h in list(expected) for g in template14.neighbors(h))
+        self.assertEqual(set(actual), expected)
+
 
 class VariantTests(unittest.TestCase):
+    def test_graph6_matches_reference_at_every_order(self):
+        rng = random.Random(20260924)
+        for n in range(1, 63):
+            length = n * (n - 1) // 2
+            full = (1 << length) - 1
+            samples = [0, full] + [rng.getrandbits(length) for _ in range(8)]
+            for bits in samples:
+                expected = chr(n + 63) + "".join(
+                    chr(63 + sum(((bits >> (start + j)) & 1) << (5 - j)
+                                 for j in range(6)))
+                    for start in range(0, length, 6))
+                self.assertEqual(graph6(n, bits), expected)
+        for n in (0, 63):
+            with self.assertRaises(ValueError):
+                graph6(n, 0)
+
     def test_graph6_roundtrip(self):
         for n in (1, 2, 3, 5, 14, 17, 62):
             length = n * (n - 1) // 2

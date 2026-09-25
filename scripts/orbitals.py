@@ -16,9 +16,13 @@ including full circulants and coupled rotations of several blocks.
 Actions exceeding --max-orbits (default 18) are skipped, so generation
 is not exhaustive over all graphs with symmetries.
 
-For fast isomorphism deduplication, output graph6 to nauty's labelg:
+Output streams without keeping a set of emitted graphs. For fast
+isomorphism deduplication of a heuristic refuter library, use:
   python3 scripts/orbitals.py 14 35 45 --family cyclic --graph6 \
-    | labelg -q | sort -u > output/cyclic14.g6
+    | labelg -q | uniqg -cq > output/cyclic14.g6
+
+uniqg stores SHA-256 fingerprints; use awk '!x[$0]++' after labelg if
+exact comparisons are required. Both retain a growing deduplication cache.
 
 graphy reads graph6 directly. To get graphy's canonical decimal labels,
 use graphy canon on the deduplicated library (or just on useful refuters).
@@ -227,8 +231,12 @@ def cyclic_actions(n, cycles=None):
 
 
 def generate(n, emin, emax, family="layers", max_orbits=MAX_ORBITS, cycles=None):
+    """Stream orbital unions, including duplicates between distinct actions.
+
+    Only the small set of orbit partitions is cached here. Downstream tools
+    can deduplicate canonical forms without retaining every labeled graph.
+    """
     partitions_done = set()
-    emitted = set()
     families = []
     if family in ("layers", "all"):
         families.append(layered_actions(n))
@@ -242,10 +250,7 @@ def generate(n, emin, emax, family="layers", max_orbits=MAX_ORBITS, cycles=None)
             # Different groups with the same pair-orbit partition generate
             # exactly the same graphs; the partition is all we need to cache.
             partitions_done.add(orbits)
-            for bits in orbit_unions(orbits, emin, emax):
-                # if bits not in emitted:
-                    # emitted.add(bits)
-                    yield bits
+            yield from orbit_unions(orbits, emin, emax)
 
 
 def main():
@@ -258,7 +263,7 @@ def main():
     parser.add_argument("--max-orbits", type=int, default=MAX_ORBITS)
     parser.add_argument("--cycles", help="restrict --family cyclic to one cycle type, e.g. 6,6,2")
     parser.add_argument("--graph6", action="store_true",
-                        help="output graph6 for fast deduplication with labelg -q | sort -u")
+                        help="output graph6 for streaming deduplication with labelg -q | uniqg -cq")
     args = parser.parse_args()
     if not 1 <= args.n <= 62:
         parser.error("n must be between 1 and 62")

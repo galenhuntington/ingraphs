@@ -5,6 +5,8 @@ pub mod tools;
 pub mod enumerate;
 pub mod seek;
 pub mod progress;
+pub mod canon;
+pub mod successors;
 
 use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::BTreeSet;
@@ -85,7 +87,7 @@ fn ingraph_scan(size: usize, pool: impl Iterator<Item=Graph>) {
     }
 }
 
-fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, expiration: usize, seeds: &[BitNum]) {
+fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, expiration: usize, seeds: &[BitNum], rng_seed: Option<u64>) {
     let progress = progress::Progress::new();
     let no_time = Duration::from_secs(0);
     let mut counterexamples: BTreeSet<_> = seeds.iter().map(|&ce| (no_time, ce, 0)).collect();
@@ -120,7 +122,10 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, expiration: usi
         let counter =
             chkce.map_or_else(
                 || {
-                    let seek = crate::seek::seek(&gr, bailout);
+                    let seek = match rng_seed {
+                        Some(seed) => crate::seek::seek_seeded(&gr, bailout, seed),
+                        None => crate::seek::seek(&gr, bailout),
+                    };
                     if let Some(gr1) = seek.0 {
                         counterexamples.insert((no_time, gr1.bits(), i));
                         // counterexamples.insert((ce_score(&gr1), gr1.bits()));
@@ -263,8 +268,18 @@ fn miss_counts(gr: &Graph) -> (usize, usize, u128) {
     counts
 }
 
-fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: BitNum) {
-    let pool: BTreeSet<_> = pool.collect();
+fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: Option<BitNum>, internal_labels: bool) {
+    let Some(max) = max else {
+        for g in successors::generate(size, pool) {
+            // Internal keys are deliberately NOT the public decimal convention.
+            let g = if internal_labels { g } else { enumerate::to_best(&g) };
+            println!("{},{},[],", g.bits(), g);
+        }
+        return;
+    };
+    // --max compares minimum-decimal labels; keep the legacy path for it.
+    let pool: BTreeSet<_> = pool.map(|g|
+        enumerate::to_best(&Graph::from_bits(size, g)).bits()).collect();
     let extends: BTreeSet<_> = pool.iter().flat_map(|g| tools::bump(
             &Graph::from_bits(size, *g), true)).collect();
     for g in extends {
@@ -363,6 +378,9 @@ enum C {
         /// Seed the counterexample pool from a file
         #[arg(long)]
         seed_file: Option<String>,
+        /// Repeatable branch randomness (use RAYON_NUM_THREADS=1 for reproducible traversal)
+        #[arg(long)]
+        rng_seed: Option<u64>,
     },
     /// Check if a single graph is an ingraph
     IngraphCheck {
@@ -395,9 +413,12 @@ enum C {
         size: usize,
         /// Graphs file
         path: String,
-        /// Maximum scanned
+        /// Maximum minimum-decimal retraction to require (uses the legacy path)
         #[arg(long)]
         max: Option<BitNum>,
+        /// Keep fast internal canonical labels in output, e.g. for chained successors
+        #[arg(long, conflicts_with = "max")]
+        internal_labels: bool,
     },
     /// Show whether a list of graphs are subgraphs of another list
     IsSubgraph {
@@ -540,11 +561,11 @@ pub fn main() {
             let pool = tools::read_graphs(size, &path);
             ingraph_scan(size, pool);
         }
-        C::IngraphSeek { size, path, bailout, seeds, seed_file, expiration } => {
+        C::IngraphSeek { size, path, bailout, seeds, seed_file, expiration, rng_seed } => {
             if bailout != Some(0) { note_threads() }
             let pool = tools::read_graphs(size, &path);
             let seeds = seed_file.map_or(seeds, |f| tools::read_graphs(size, &f).collect());
-            ingraph_seek(pool, bailout.unwrap_or(usize::MAX), expiration, &seeds);
+            ingraph_seek(pool, bailout.unwrap_or(usize::MAX), expiration, &seeds, rng_seed);
         }
         C::IngraphCheck { size, bits, path } => {
             note_threads();
@@ -571,9 +592,9 @@ pub fn main() {
                 bits, gr, bits.count_ones(), bits.show_bits(), tools::count_symmetries(&gr),
                 tools::build_sorted_row(&gr));
         }
-        C::Successors { size, path, max } => {
+        C::Successors { size, path, max, internal_labels } => {
             let pool = tools::read_graphs(size, &path);
-            successors(size, pool, max.unwrap_or(BitNum::MAX));
+            successors(size, pool, max, internal_labels);
         }
         C::IsSubgraph { table, color, graphs } => {
             let (subs, sups) = parse_subgraph_args(graphs).unwrap_or_else(||
@@ -649,4 +670,3 @@ pub fn main() {
         }
     }
 }
-

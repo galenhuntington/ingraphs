@@ -218,7 +218,16 @@ pub fn is_best(gr: &Graph) -> bool {
 
 pub fn to_best(gr: &Graph) -> Graph {
     // eprintln!("is_best({} {} {:b})", gr, gr.edges.0.0, gr.edges.0.0);
-    let mut last = gr.bits();
+    if gr.size <= 1 { return *gr }
+    // A cheap isomorphic upper bound matters enormously for labels from
+    // nauty, which often put isolated/low-degree vertices first. Moving
+    // high-degree vertices toward the low bits can tighten the initial
+    // cutoff before the exact search starts. Never worsen the original bound.
+    let degrees: Vec<_> = (0..gr.size).map(|v| gr.degree_of(v)).collect();
+    let mut order: Vec<_> = (0..gr.size).collect();
+    order.sort_by_key(|&v| std::cmp::Reverse(degrees[v]));
+    let reordered = Graph::from_fn(gr.size, |a, b| gr.has_edge(order[a], order[b]));
+    let mut last = gr.bits().min(reordered.bits());
     // XXX unclear why I need multiple calls
     loop {
         let next: BitNum = new_recurse(last, gr.size - 1, 0, last);
@@ -346,6 +355,21 @@ mod tests {
     use rand::Rng;
 
     #[test]
+    fn test_best_with_permuted_isolated_vertices() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(20260924);
+        let expected = tools::naive_find_best(&Graph::from_bits(5, 94)).bits();
+        for size in 5..=crate::base::MAX_SIZE {
+            let gr = Graph::from_bits(size, 94);
+            for _ in 0..40 {
+                let p = crate::perm::Perm::random(&mut rng, size);
+                assert_eq!(to_best(&gr.renumber(&p)).bits(), expected);
+            }
+        }
+        assert_eq!(to_best(&Graph::from_bits(0, 0)).bits(), 0);
+    }
+
+    #[test]
     fn test_smoosh() {
         assert_eq!(smoosh(0b_110_01_0, 0), 0b_11_1);
         assert_eq!(smoosh(0b_110_01_0, 0b1_0), 0b_1_10_1);
@@ -401,4 +425,3 @@ mod tests {
         }
     }
 }
-

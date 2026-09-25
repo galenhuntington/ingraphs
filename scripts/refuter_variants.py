@@ -21,13 +21,18 @@ def edge_index(a, b):
     return b * (b - 1) // 2 + a
 
 
+# Graphy's first edge is the low bit; graph6 puts it at the high end of
+# each sextet. Reverse six bits once per table entry, not once per edge.
+_GRAPH6_SEXTETS = tuple(chr(63 + int(f"{value:06b}"[::-1], 2))
+                       for value in range(64))
+
+
 def graph6(n, bits):
     if not 1 <= n <= 62:
         raise ValueError("single-byte graph6 requires 1 <= n <= 62")
     length = n * (n - 1) // 2
     return chr(n + 63) + "".join(
-        chr(63 + sum(((bits >> (start + j)) & 1) << (5 - j)
-                     for j in range(6)))
+        _GRAPH6_SEXTETS[(bits >> start) & 63]
         for start in range(0, length, 6)
     )
 
