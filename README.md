@@ -99,6 +99,74 @@ use `awk '!x[$0]++'` after `labelg`. Both deduplicators have growing memory
 use, even though their output streams. They are not the exhaustive search's
 visited-state implementation, which always uses exact packed graph keys.
 
+### Candidate-directed counterexample repair
+
+`ingraph-repair` starts from host seeds (or random hosts), and permits both
+adding and deleting edges. Its default `--method counted` minimizes the
+**exact number of distinct monochromatic copies** of the candidate, with
+tabu moves to leave local minima. It computes every one-edge score change
+in one traversal of monochromatic and one-wrong-edge copies. Unlike `seek`,
+this is a heuristic search, not an exhaustive universality test.
+
+```sh
+target/release/graphy ingraph-repair 14 output/batches/all14 \
+    --seed-file output/somes-14.txt --free-seeds \
+    --restarts 16 --seconds 10 --jobs 4 --rng-seed 20260926 \
+    > output/repair14.csv 2> output/repair14.log
+```
+
+Budgets apply **per restart per candidate**. `--steps` caps flips; `--seconds 0`
+disables the clock limit for reproducible step-limited traces. Seeds are
+deduplicated up to isomorphism and complement, then relabelled at each restart.
+`--free-seeds` prefers seeds avoiding the candidate in at least one colour,
+falling back to the full pool if none do. Every fourth restart is random;
+`--random-every 0` uses only supplied seeds. `--perturb k` changes exactly k
+distinct edges before a walk. Default builds currently support n <= 16.
+
+CSV output streams one row per restart and stops that candidate after a hit.
+`refuter` is filled **only** after both colours pass an exact absence check.
+`saved_host` holds the best scored host for `counted`, the last host for
+`learned`, or the seed for an unsuccessful `neighbourhood` search. Labels
+are arbitrary, not minimum-decimal. `best_copies` is an exact score, not a
+distance to a refuter; blank means no score was completed. `walk_seed` is
+the derived internal RNG seed, not the original `--rng-seed` argument.
+Clock limits are soft around exact existence calls; counted traversals
+check the clock internally and discard incomplete counts.
+For `counted`, `checks` is twice the number of attempted score evaluations,
+plus two final absence checks on success; an interrupted evaluation may not
+have reached its second colour. For `neighbourhood`, `flips` counts distinct
+visited non-root states, not the distance of the final host from the seed.
+
+Continue from the best hosts **for each candidate**, without mixing them up:
+
+```sh
+python3 scripts/refine_repair.py output/repair14.csv \
+    --keep 3 --restarts 8 --seconds 30 --perturb 4 --jobs 4 \
+    --rng-seed 20260927 > output/repair14-refined.csv 2> output/repair14-refined.log
+```
+
+Alternative methods:
+
+- `--method learned` accumulates labelled-copy NAE constraints, then flips
+  edges to repair that sampled bank. `--max-constraints` bounds memory;
+  satisfying the bank is **not** success without the full absence checks.
+- `--method neighbourhood --depth 4` branches on edges of actual surviving
+  copies to search the whole radius-four edit ball. `--steps` now caps
+  visited non-root states. `neighbourhood-exhausted` rules out only that
+  ball, not all refuters; any other limit is inconclusive even within it.
+
+Neither normal exhaustion nor a positive `best_copies` proves universality.
+Independently check returned certificates with:
+
+```sh
+awk -F, 'NR == 1 || $4 == "refuted"' output/repair14-refined.csv > output/repair14-certs.csv
+python3 research/verify_refutations.py output/repair14-certs.csv
+```
+
+The verifier intentionally rejects an empty certificate file. Controls,
+measurements, near-misses, and longer-run suggestions are in
+[the September 26 research note](research/2026-09-26.md).
+
 ## Some graphs
 
 Here are numeric representations of some graphs mentioned in the

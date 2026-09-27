@@ -7,6 +7,7 @@ pub mod seek;
 pub mod progress;
 pub mod canon;
 pub mod successors;
+pub mod repair;
 
 use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::BTreeSet;
@@ -304,6 +305,8 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: Option<BitNum>
 
 #[derive(Debug,Subcommand)]
 enum C {
+    /// Seeded counterexample repair by exact copy counts or learned constraints
+    IngraphRepair(repair::Args),
     /// Enumerate all graphs
     #[command(arg_required_else_help = true)]
     Enumerate {
@@ -519,6 +522,7 @@ fn parse_subgraph_args(strs: Vec<String>) -> Option<(Vec<BitNum>, Vec<BitNum>)> 
 pub fn main() {
     let args = Cli::parse();
     match args.command {
+        C::IngraphRepair(args) => repair::run(args),
         C::Enumerate { size } => {
             enumerate(size, None, &[]);
         }
