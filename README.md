@@ -154,6 +154,19 @@ two-wrong-edge copies; it is disabled by default (`--pair-every 0`), and can
 reduce the number of flips substantially at the same wall-clock budget.
 Pair choices consider all edges regardless of `--moves`.
 
+`--penalty-every 1` enables experimental adaptive copy penalties. At each
+weighted stall it increases the extra weight of up to `--penalty-batch 64`
+distinct violated labelled copies **per colour**, by `--penalty-step 1`.
+Moves minimize the exact raw delta plus the extra weighted delta. The memory
+holds at most `--penalty-cap 4096` copy masks, with FIFO eviction; weights
+are halved every `--penalty-decay 64` updates (zero disables decay). A copy
+keeps its weight when satisfied, so returning to it becomes less attractive.
+Penalty updates are cumulative non-improving decisions, not elapsed time.
+This is a bounded heuristic, not a completeness guarantee. It currently
+requires `--method counted --pair-every 0`, and is **off by default**.
+Archives, tabu aspiration, `best_copies`, and the acceptance gate always use
+the **unweighted** count. The same flags work in `refine_repair.py`.
+
 `--archive 8 --archive-slack 32` keeps a bounded sample of distinct
 isomorphism/complement classes within 32 copies of the best visited score.
 Lower scores take priority; ties use a deterministic per-walk sampling rank.
@@ -167,8 +180,9 @@ grow with walk length.
 Use `record=outcome` when counting attempts or comparing flip totals.
 Checkpoint/seed rows have zero timing and evaluation totals to avoid double
 counting; an archive row's `flips` says when that host was first retained.
-New diagnostics include `pair_evaluations`, `pair_moves`, `outside_moves`
-(edge flips outside the current copy support), and `best_step`.
+Diagnostics include `pair_evaluations`, `pair_moves`, `outside_moves`
+(edge flips outside the current copy support), `best_step`, `penalty_updates`,
+and `penalty_constraints` (final memory size, not an exact total copy count).
 
 Continue from the best hosts **for each candidate**, without mixing them up:
 
@@ -206,6 +220,40 @@ for a refuted candidate are skipped; already running jobs finish (at most
 `jobs-1` extra attempts). `--no-share` disables cross-checking. Neither
 filtering nor sharing edits your survivor files.
 
+Candidate-specific `free-close` outputs can be screened and imported too:
+
+```sh
+python3 scripts/free_close_seeds.py 14 --per-layer 32 --keep 16 --jobs 4 \
+    --rng-seed 20260928 > output/free-close14-seeds.csv 2> output/free-close14-seeds.log
+python3 scripts/refine_repair.py output/free-close14-seeds.csv \
+    --keep 16 --restarts 4 --seconds 5 --perturb 0 --jobs 4 \
+    > output/free-close14-repair.csv 2> output/free-close14-repair.log
+```
+
+The importer defaults to `output/runs14/F-*/found-*.csv`, restricted to
+`output/batches/all14`. It samples each edge-count layer separately, dedups
+exact isomorphism/complement classes, and **rechecks** both colour counts.
+Only fully scored, genuinely F-free hosts are retained, ranked by total
+copies; the old boolean column is not trusted as a certificate. `--per-layer 0`
+scores all raw hosts; `--keep 0` exports all completed valid scores. The
+default counting timeout is 0.25 seconds **per host**, not per candidate.
+The `record=free-close` rows include original source paths and both colour
+counts; their timing fields describe screening, not repair attempts.
+Use a free-close-only input for a seed experiment: mixing it immediately
+with low-scoring old checkpoints may discard every new seed at `--keep`.
+
+For stand-alone exact scoring, without near-miss or flip-delta enumeration:
+
+```sh
+target/release/graphy ingraph-count 14 482968729600 HOSTS.txt --seconds 1 --jobs 4
+```
+
+The output has red, blue and total copy counts, or blank counts on timeout.
+The budget is per host; zero disables it. Zero totals also pass the separate
+absence matcher before receiving `status=refuted`. Parallel output order
+is unspecified. Neither command claims that a low copy count is an edit
+distance, nor that a maximum-density F-free host is necessarily a good seed.
+
 Alternative methods:
 
 - `--method learned` accumulates labelled-copy NAE constraints, then flips
@@ -228,7 +276,9 @@ The verifier intentionally rejects an empty certificate file. Controls,
 measurements, near-misses, and longer-run suggestions are in
 [the September 26 research note](research/2026-09-26.md). The archive,
 escape-move and pair-scoring follow-up is in
-[the September 27 note](research/2026-09-27.md).
+[the September 27 note](research/2026-09-27.md). Adaptive penalties and
+screening the old free-close seeds are covered in
+[the September 28 note](research/2026-09-28.md).
 
 ## Some graphs
 

@@ -307,6 +307,8 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: Option<BitNum>
 enum C {
     /// Seeded counterexample repair by exact copy counts or learned constraints
     IngraphRepair(repair::Args),
+    /// Exact monochromatic copy counts, without computing repair moves
+    IngraphCount(repair::CountArgs),
     /// Enumerate all graphs
     #[command(arg_required_else_help = true)]
     Enumerate {
@@ -529,6 +531,7 @@ pub fn main() {
     let args = Cli::parse();
     match args.command {
         C::IngraphRepair(args) => repair::run(args),
+        C::IngraphCount(args) => repair::count_hosts(args),
         C::Enumerate { size } => {
             enumerate(size, None, &[]);
         }

@@ -10,12 +10,35 @@ import tempfile
 import unittest
 
 from refine_repair import BINARY, canonical_keys, cross_refutations, select_seeds, tasks
+from free_close_seeds import collect_hosts, sample_layers
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "research"))
 from count_copies import copies
 
 
 class RepairTests(unittest.TestCase):
+    def test_free_close_parsing_and_layer_sampling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ["7-4", "7-8-alt", "3-4"]:
+                (root / name).mkdir()
+            (root / "7-4/found-0.csv").write_text("613,5,false,5:[ignored]\n")
+            (root / "7-4/found-1.csv").write_text("")
+            (root / "7-8-alt/found-0.csv").write_text("613,5,false,5:[ignored]\n")
+            (root / "3-4/found-0.csv").write_text("0,0,true,5:[]\n")
+            groups = collect_hosts(root, 5, {7, 15})
+            self.assertEqual(set(groups), {7})
+            self.assertEqual(list(groups[7]), [613])
+            (root / "7-4/found-2.csv").write_text("613,4,false,5:[wrong count]\n")
+            with self.assertRaises(ValueError):
+                collect_hosts(root, 5, {7})
+        hosts = {h: (h.bit_count(), "dummy") for h in range(1, 64)}
+        sample = sample_layers(hosts, 2, 123, 7)
+        self.assertEqual(sample, sample_layers(dict(reversed(list(hosts.items()))), 2, 123, 7))
+        self.assertEqual({h.bit_count() for h in sample}, {1, 2, 3, 4, 5, 6})
+        self.assertEqual(len(sample), 11)
+        self.assertEqual(set(sample_layers(hosts, 0, 123, 7)), set(hosts))
+
     def test_selects_best_distinct_hosts_and_skips_refuted_candidates(self):
         fields = ["n", "candidate", "saved_host", "best_copies", "status"]
         rows = [(14, 10, 100, 7, "time-limit"),
@@ -62,6 +85,48 @@ class RepairTests(unittest.TestCase):
 
 @unittest.skipUnless(Path(BINARY).exists(), "build target/release/graphy for CLI integration tests")
 class RepairCliTests(unittest.TestCase):
+    def test_count_only_and_free_close_import(self):
+        result = subprocess.run([BINARY, "ingraph-count", "5", "7", "/dev/stdin", "--seconds", "0"],
+                                input="0\n613\n1023\n", text=True, capture_output=True, check=True)
+        rows = list(csv.DictReader(io.StringIO(result.stdout)))
+        for row in rows:
+            h = int(row["host"])
+            self.assertEqual(int(row["red_copies"]), len(copies(5, 7, h)))
+            self.assertEqual(int(row["blue_copies"]), len(copies(5, 7, h ^ 1023)))
+        self.assertEqual(rows[1]["status"], "refuted")
+        timed = subprocess.run([BINARY, "ingraph-count", "5", "7", "/dev/stdin", "--seconds", "1e-12"],
+                               input="613\n", text=True, capture_output=True, check=True)
+        row = list(csv.DictReader(io.StringIO(timed.stdout)))[0]
+        self.assertEqual((row["status"], row["total_copies"]), ("time-limit", ""))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "7-4").mkdir()
+            (root / "7-4/found-0.csv").write_text("613,5,false,5:[ignored]\n1023,10,true,5:[invalid free seed]\n")
+            (root / "candidates").write_text("7\n")
+            imported = subprocess.run([sys.executable, str(Path(__file__).with_name("free_close_seeds.py")), "5",
+                                       "--root", str(root), "--candidates", str(root / "candidates"), "--seconds", "0"],
+                                      text=True, capture_output=True, check=True)
+            rows = list(csv.DictReader(io.StringIO(imported.stdout)))
+            self.assertEqual([(r["candidate"], r["refuter"], r["best_copies"]) for r in rows], [("7", "613", "0")])
+            self.assertIn("NOT F-free", imported.stderr)
+
+    def test_weighted_refiner_keeps_raw_scores_and_validates_options(self):
+        command = [sys.executable, str(Path(__file__).with_name("refine_repair.py")), "/dev/stdin",
+                   "--restarts", "1", "--seconds", "0", "--steps", "50", "--penalty-every", "1",
+                   "--penalty-cap", "7", "--penalty-decay", "3", "--no-share"]
+        seed = "n,candidate,saved_host,best_copies,status\n6,7,0,20,time-limit\n"
+        result = subprocess.run(command, input=seed, text=True, capture_output=True, check=True)
+        rows = list(csv.DictReader(io.StringIO(result.stdout)))
+        outcome = next(r for r in rows if r["record"] == "outcome")
+        self.assertGreater(int(outcome["penalty_updates"]), 0)
+        self.assertLessEqual(int(outcome["penalty_constraints"]), 7)
+        for row in rows:
+            h = int(row["saved_host"])
+            self.assertEqual(int(row["best_copies"]), len(copies(6, 7, h)) + len(copies(6, 7, h ^ 32767)))
+        invalid = subprocess.run(command + ["--pair-every", "1"], input=seed, text=True, capture_output=True)
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("penalties currently require", invalid.stderr)
+
     def test_refiner_schedules_restarts_and_carries_input_seeds(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "input.csv"

@@ -22,7 +22,8 @@ from threading import Lock, Thread
 BINARY = str(Path(__file__).resolve().parents[1] / "target/release/graphy")
 FIELDS = ("n,candidate,refuter,status,restart,walk_seed,flips,checks,constraints,violated,"
           "seconds,oracle_seconds,start_host,saved_host,distance,best_copies,method,source_seed,"
-          "record,pair_evaluations,pair_moves,outside_moves,best_step").split(",")
+          "record,pair_evaluations,pair_moves,outside_moves,best_step,"
+          "penalty_updates,penalty_constraints").split(",")
 
 
 def read_results(paths):
@@ -143,6 +144,11 @@ def main():
     parser.add_argument("--noise", type=float, default=0.2)
     parser.add_argument("--moves", choices=["focused", "all"], default="all")
     parser.add_argument("--pair-every", type=int, default=0)
+    parser.add_argument("--penalty-every", type=int, default=0, help="boost copy penalties every kth weighted stall; 0 disables")
+    parser.add_argument("--penalty-step", type=int, default=1)
+    parser.add_argument("--penalty-cap", type=int, default=4096)
+    parser.add_argument("--penalty-decay", type=int, default=64)
+    parser.add_argument("--penalty-batch", type=int, default=64)
     parser.add_argument("--archive", type=int, default=8)
     parser.add_argument("--archive-slack", type=int, default=32)
     parser.add_argument("--seconds", type=float, default=10)
@@ -163,6 +169,13 @@ def main():
         parser.error("seconds must be finite and nonnegative; noise must be in [0,1]")
     if min(args.steps, args.perturb, args.tabu, args.depth) < 0:
         parser.error("steps, perturb, tabu, and depth must be nonnegative")
+    if min(args.penalty_every, args.penalty_decay, args.penalty_cap, args.penalty_batch, args.penalty_step) < 0:
+        parser.error("penalty options must be nonnegative")
+    if args.penalty_every:
+        if args.method != "counted" or args.pair_every:
+            parser.error("penalties currently require --method counted --pair-every 0")
+        if min(args.penalty_cap, args.penalty_batch) < 1 or not 1 <= args.penalty_step <= 1_000_000:
+            parser.error("penalty-cap/batch must be positive; penalty-step must be in 1..1000000")
     candidates = None
     if args.candidates:
         with open(args.candidates) as source:
@@ -198,7 +211,7 @@ def main():
                 row.update(n=n, candidate=f, refuter=h, saved_host=h, best_copies=0,
                            status="refuted", record="cross-refutation", method="CrossCheck")
                 for field in ["flips", "checks", "constraints", "violated", "seconds", "oracle_seconds",
-                              "pair_evaluations", "pair_moves", "outside_moves"]:
+                              "pair_evaluations", "pair_moves", "outside_moves", "penalty_updates", "penalty_constraints"]:
                     row[field] = 0
                 writer.writerow(row)
                 print(f"shared refuter n={n}: {h} refutes {f}", file=sys.stderr, flush=True)
@@ -222,7 +235,7 @@ def main():
             row.update(n=n, candidate=f, saved_host=h, best_copies=catalog[0][n, f][h],
                        status="checkpoint", record="seed", source_seed=h, method="Counted")
             for field in ["flips", "checks", "constraints", "violated", "seconds", "oracle_seconds",
-                          "pair_evaluations", "pair_moves", "outside_moves"]:
+                          "pair_evaluations", "pair_moves", "outside_moves", "penalty_updates", "penalty_constraints"]:
                 row[field] = 0
             writer.writerow(row)
     sys.stdout.flush()
@@ -239,7 +252,8 @@ def main():
                    "--seeds", ",".join(map(str, seeds)), "--random-every", "0", "--jobs", "1",
                    "--restarts", "1", "--restart-offset", str(restart)]
         for option in ["depth", "tabu", "noise", "seconds", "steps", "perturb", "rng_seed",
-                       "moves", "pair_every", "archive", "archive_slack"]:
+                       "moves", "pair_every", "archive", "archive_slack", "penalty_every",
+                       "penalty_step", "penalty_cap", "penalty_decay", "penalty_batch"]:
             command.extend(["--" + option.replace("_", "-"), str(getattr(args, option))])
         with lock:
             print(f"refine n={n} F={candidate} restart={restart}: {shlex.join(command)}",

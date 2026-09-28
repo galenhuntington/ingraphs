@@ -28,12 +28,19 @@ def main():
     parser.add_argument("--method", choices=["learned", "counted"], default="counted")
     parser.add_argument("--moves", choices=["focused", "all"], default="all")
     parser.add_argument("--pair-every", type=int, default=0)
+    parser.add_argument("--penalty-every", type=int, default=0)
+    parser.add_argument("--penalty-step", type=int, default=1)
+    parser.add_argument("--penalty-cap", type=int, default=4096)
+    parser.add_argument("--penalty-decay", type=int, default=64)
+    parser.add_argument("--penalty-batch", type=int, default=64)
     parser.add_argument("--tabu", type=int, default=7)
     parser.add_argument("--legacy", action="store_true", help="omit new flags for an older baseline binary")
     parser.add_argument("--controls", nargs="+", type=Path, help="CSV files with n,candidate,refuter; overrides built-in controls")
     args = parser.parse_args()
     if args.trials < 1 or args.seconds < 0 or any(d < 0 for d in args.perturb):
         parser.error("invalid budgets")
+    if args.legacy and args.penalty_every:
+        parser.error("--legacy cannot test adaptive penalties")
     controls = []
     paths = args.controls or [ROOT / "research" / name for name in
                              ["refutations-2026-09-17.csv", "refutations-2026-09-23.csv"]]
@@ -56,6 +63,8 @@ def main():
                 if not args.legacy:
                     command.extend(["--moves", args.moves, "--pair-every", str(args.pair_every),
                                     "--archive", "0"])
+                    for option in ["penalty_every", "penalty_step", "penalty_cap", "penalty_decay", "penalty_batch"]:
+                        command.extend(["--" + option.replace("_", "-"), str(getattr(args, option))])
                 result = subprocess.run(command, input=control["candidate"] + "\n",
                                         text=True, stdout=subprocess.PIPE, check=True)
                 rows = list(csv.DictReader(io.StringIO(result.stdout)))

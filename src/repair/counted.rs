@@ -8,12 +8,14 @@
 use super::*;
 use crate::base::{index, rev_index};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Score {
     copies: u64,
+    colors: [u64; 2],
     makes: Vec<u64>,
     breaks: Vec<u64>,
     pairs: Vec<i64>,
+    witnesses: std::collections::BTreeSet<BitNum>,
 }
 
 impl Score {
@@ -35,7 +37,7 @@ struct Counter {
     multiplicity: u64,
 }
 
-struct Search<'a, const PAIRS: bool> {
+struct Search<'a, const WRONG: u32> {
     counter: &'a Counter,
     host_adj: [u32; MAX_SIZE],
     domains: [[u32; MAX_SIZE]; 3],
@@ -45,6 +47,7 @@ struct Search<'a, const PAIRS: bool> {
     timer: Instant,
     deadline: Option<Duration>,
     nodes: u64,
+    witness_limit: usize,
 }
 
 impl Counter {
@@ -89,27 +92,42 @@ impl Counter {
 
     // A timed-out enumeration yields NO score, not a partial lower score.
     fn score(&self, host: Graph, timer: Instant, deadline: Option<Duration>) -> Option<Score> {
-        self.evaluate::<false>(host, timer, deadline)
+        self.evaluate::<1>(host, timer, deadline)
     }
 
-    fn evaluate<const PAIRS: bool>(
+    fn evaluate<const WRONG: u32>(
         &self,
         host: Graph,
         timer: Instant,
         deadline: Option<Duration>,
     ) -> Option<Score> {
+        self.evaluate_collect::<WRONG>(host, timer, deadline, 0)
+    }
+
+    fn evaluate_collect<const WRONG: u32>(
+        &self,
+        host: Graph,
+        timer: Instant,
+        deadline: Option<Duration>,
+        witnesses_per_color: usize,
+    ) -> Option<Score> {
+        assert!(WRONG <= 2);
         let variables = Graph::triangle(self.size);
         let mut score = Score {
             copies: 0,
+            colors: [0; 2],
             makes: vec![0; variables],
             breaks: vec![0; variables],
-            pairs: if PAIRS {
+            pairs: if WRONG == 2 {
                 vec![0; Graph::triangle(variables)]
             } else {
                 Vec::new()
             },
+            witnesses: std::collections::BTreeSet::new(),
         };
-        for host in [host, host.complement()] {
+        for (color, host) in [host, host.complement()].into_iter().enumerate() {
+            let before = score.copies;
+            let witness_limit = score.witnesses.len() + witnesses_per_color;
             let mut host_adj = [0u32; MAX_SIZE];
             for edge in bits(host.bits()) {
                 let (a, b) = rev_index(edge);
@@ -119,14 +137,14 @@ impl Counter {
             let mut domains = [[0u32; MAX_SIZE]; 3];
             for &v in &self.order {
                 for (w, row) in host_adj[..self.size].iter().enumerate() {
-                    for remaining in 0..=if PAIRS { 2 } else { 1 } {
+                    for remaining in 0..=WRONG {
                         if row.count_ones() + remaining as u32 >= self.adjacent[v].count_ones() {
-                            domains[remaining][v] |= 1 << w;
+                            domains[remaining as usize][v] |= 1 << w;
                         }
                     }
                 }
             }
-            let mut search = Search::<PAIRS> {
+            let mut search = Search::<WRONG> {
                 counter: self,
                 host_adj,
                 domains,
@@ -136,13 +154,19 @@ impl Counter {
                 timer,
                 deadline,
                 nodes: 0,
+                witness_limit,
             };
             if !search.go(0, 0, 0, 0) {
                 return None;
             }
+            score.colors[color] = score.copies - before;
         }
         assert_eq!(score.copies % self.multiplicity, 0);
         score.copies /= self.multiplicity;
+        for value in &mut score.colors {
+            assert_eq!(*value % self.multiplicity, 0);
+            *value /= self.multiplicity;
+        }
         for value in score.makes.iter_mut().chain(&mut score.breaks) {
             debug_assert_eq!(*value % self.multiplicity, 0);
             *value /= self.multiplicity;
@@ -155,7 +179,7 @@ impl Counter {
     }
 }
 
-impl<const PAIRS: bool> Search<'_, PAIRS> {
+impl<const WRONG: u32> Search<'_, WRONG> {
     // false means interrupted; otherwise this subtree has been fully counted.
     fn go(&mut self, depth: usize, used: u32, edge_set: BitNum, wrong: BitNum) -> bool {
         self.nodes += 1;
@@ -165,13 +189,18 @@ impl<const PAIRS: bool> Search<'_, PAIRS> {
         if depth == self.counter.order.len() {
             if wrong == 0 {
                 self.score.copies += 1;
-                for edge in bits(edge_set) {
-                    self.score.makes[edge] += 1;
+                if WRONG != 0 {
+                    for edge in bits(edge_set) {
+                        self.score.makes[edge] += 1;
+                    }
+                }
+                if self.score.witnesses.len() < self.witness_limit {
+                    self.score.witnesses.insert(edge_set);
                 }
             } else if wrong.count_ones() == 1 {
                 self.score.breaks[wrong.trailing_zeros() as usize] += 1;
             }
-            if PAIRS {
+            if WRONG == 2 {
                 // A monochromatic copy was subtracted twice by two makes;
                 // a one-wrong copy was added by its sole wrong flip, but a
                 // simultaneous right flip destroys it; a two-wrong copy is
@@ -203,7 +232,7 @@ impl<const PAIRS: bool> Search<'_, PAIRS> {
         let v = self.counter.order[depth];
         // Already missing edges have both endpoints placed, so later vertices
         // may lose at most the remaining wrong-edge budget in their degree.
-        let remaining = (if PAIRS { 2 } else { 1 }) - wrong.count_ones();
+        let remaining = WRONG - wrong.count_ones();
         let mut choices = self.domains[remaining as usize][v] & !used;
         if remaining == 0 {
             let mut r = self.required[v];
@@ -259,6 +288,64 @@ impl<const PAIRS: bool> Search<'_, PAIRS> {
         }
         true
     }
+}
+
+pub(super) fn count_hosts(args: CountArgs) {
+    assert!((1..=MAX_SIZE).contains(&args.size));
+    assert!(args.jobs > 0 && args.seconds.is_finite() && args.seconds >= 0.0);
+    assert_eq!(args.candidate >> Graph::triangle(args.size), 0);
+    let pattern = Graph::from_bits(args.size, args.candidate);
+    let counter = Counter::new(&pattern);
+    let hosts: Vec<Graph> = read_graphs(args.size, &args.path).collect();
+    let deadline = (args.seconds > 0.0).then(|| Duration::from_secs_f64(args.seconds));
+    println!("n,candidate,host,status,edges,red_copies,blue_copies,total_copies,seconds");
+    std::io::stdout().flush().unwrap();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.jobs)
+        .build()
+        .unwrap()
+        .install(|| {
+            hosts.par_iter().for_each(|&host| {
+                assert_eq!(host.bits() >> Graph::triangle(args.size), 0);
+                let timer = Instant::now();
+                let score = counter.evaluate::<0>(host, timer, deadline);
+                let (status, red, blue, total) = match score {
+                    None => ("time-limit", String::new(), String::new(), String::new()),
+                    Some(score) => {
+                        let status = if score.copies == 0 {
+                            let row = build_sorted_row(&pattern);
+                            assert!(find_subgraph_ss(&pattern, &row, &host).is_none());
+                            assert!(find_subgraph_ss(&pattern, &row, &host.complement()).is_none());
+                            "refuted"
+                        } else {
+                            "counted"
+                        };
+                        (
+                            status,
+                            score.colors[0].to_string(),
+                            score.colors[1].to_string(),
+                            score.copies.to_string(),
+                        )
+                    }
+                };
+                let mut out = std::io::stdout().lock();
+                writeln!(
+                    out,
+                    "{},{},{},{},{},{},{},{},{:.6}",
+                    args.size,
+                    args.candidate,
+                    host.bits(),
+                    status,
+                    host.edge_count(),
+                    red,
+                    blue,
+                    total,
+                    timer.elapsed().as_secs_f64()
+                )
+                .unwrap();
+                out.flush().unwrap();
+            });
+        });
 }
 
 // Keep a bounded sample of distinct near-best classes. Score has priority;
@@ -393,6 +480,8 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
     let mut best = None;
     let mut diagnostics = Diagnostics::default();
     let mut archive = Archive::new(config, start);
+    let weighted = config.penalty_every != 0;
+    let mut penalties = penalty::Penalties::new(config.penalty_cap);
     let mut stalled_decisions = 0u64;
     let mut flips = 0;
     let mut checks = 0;
@@ -402,7 +491,11 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
     let mut next_progress = Duration::from_secs(10);
     let status = loop {
         let before = Instant::now();
-        let score = counter.score(host, timer, deadline);
+        let score = if weighted {
+            counter.evaluate_collect::<1>(host, timer, deadline, config.penalty_batch)
+        } else {
+            counter.score(host, timer, deadline)
+        };
         oracle_time += before.elapsed();
         checks += 2;
         let Some(score) = score else {
@@ -441,9 +534,33 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
             next_progress = timer.elapsed() + Duration::from_secs(10);
         }
         let mut choices = single_choices(&score, &tabu_until, flips, best.unwrap(), config.moves);
-        let min_delta = choices.iter().map(|&v| score.delta(v)).min().unwrap();
+        let mut extra = if weighted {
+            penalties.deltas(host.bits(), variables)
+        } else {
+            vec![0; variables]
+        };
+        let mut min_delta = choices
+            .iter()
+            .map(|&v| score.delta(v) + extra[v])
+            .min()
+            .unwrap();
         if min_delta >= 0 {
             stalled_decisions += 1;
+        }
+        if min_delta >= 0 && weighted && stalled_decisions % config.penalty_every == 0 {
+            // Only fully enumerated scores reach here. Remember actual distinct
+            // labelled copies, not embedding multiplicities or abstract classes.
+            penalties.boost(
+                score.witnesses.iter().copied(),
+                config.penalty_step,
+                config.penalty_decay,
+            );
+            extra = penalties.deltas(host.bits(), variables);
+            min_delta = choices
+                .iter()
+                .map(|&v| score.delta(v) + extra[v])
+                .min()
+                .unwrap();
         }
         if min_delta >= 0
             && config.pair_every != 0
@@ -451,7 +568,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
             && config.steps - flips >= 2
         {
             let before = Instant::now();
-            let paired = counter.evaluate::<true>(host, timer, deadline);
+            let paired = counter.evaluate::<2>(host, timer, deadline);
             oracle_time += before.elapsed();
             checks += 2;
             diagnostics.pair_evaluations += 1;
@@ -473,7 +590,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
         }
         let random = min_delta >= 0 && rng.gen_bool(config.noise);
         if !random {
-            choices.retain(|&v| score.delta(v) == min_delta);
+            choices.retain(|&v| score.delta(v) + extra[v] == min_delta);
         }
         let edge = *choices.choose(rng).unwrap();
         host.edges.0.0 ^= 1 << edge;
@@ -482,6 +599,8 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
         diagnostics.outside_moves += u64::from(score.makes[edge] == 0);
     };
     diagnostics.archive = archive.finish(best_host);
+    diagnostics.penalty_updates = penalties.updates;
+    diagnostics.penalty_constraints = penalties.len();
     Outcome {
         host: best_host,
         status,
@@ -522,9 +641,27 @@ mod tests {
             let counter = Counter::new(&pattern);
             let host = random_graph(&mut rng, 5);
             let score = counter.score(host, Instant::now(), None).unwrap();
-            let paired = counter
-                .evaluate::<true>(host, Instant::now(), None)
+            let only = counter.evaluate::<0>(host, Instant::now(), None).unwrap();
+            let witnessed = counter
+                .evaluate_collect::<1>(host, Instant::now(), None, 3)
                 .unwrap();
+            assert_eq!(score.copies, only.copies);
+            assert_eq!(score.colors, only.colors);
+            assert_eq!(score.copies, score.colors.iter().sum());
+            assert_eq!(score.copies, witnessed.copies);
+            assert!(witnessed.witnesses.len() <= 6);
+            let possible: HashSet<_> = crate::perm::all_perms(5)
+                .map(|p| pattern.renumber(&p).bits())
+                .collect();
+            for &mask in &witnessed.witnesses {
+                assert!(possible.contains(&mask));
+                assert!(mask & host.bits() == 0 || mask & !host.bits() == 0);
+            }
+            assert_eq!(
+                witnessed.witnesses.len(),
+                score.colors.iter().map(|&n| n.min(3) as usize).sum()
+            );
+            let paired = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
             assert_eq!(score.copies, brute(pattern, host));
             assert_eq!(score.copies, paired.copies);
             assert_eq!(score.makes, paired.makes);
@@ -560,9 +697,51 @@ mod tests {
         );
         assert!(
             counter
-                .evaluate::<true>(pattern, Instant::now(), Some(Duration::ZERO))
+                .evaluate::<2>(pattern, Instant::now(), Some(Duration::ZERO))
                 .is_none()
         );
+        assert!(
+            counter
+                .evaluate::<0>(pattern, Instant::now(), Some(Duration::ZERO))
+                .is_none()
+        );
+        assert!(
+            counter
+                .evaluate_collect::<1>(pattern, Instant::now(), Some(Duration::ZERO), 64)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn weighted_walks_keep_exact_scores_and_repeatable_traces() {
+        // K6 always has a monochromatic triangle, so this exercises penalties,
+        // evictions and smoothing throughout, rather than stopping on a hit.
+        let pattern = Graph::from_bits(6, 7);
+        let config = Config {
+            penalty_every: 1,
+            penalty_cap: 7,
+            penalty_decay: 3,
+            penalty_batch: 4,
+            archive: 6,
+            steps: 100,
+            seconds: 0.0,
+            ..Config::default()
+        };
+        let start = Graph::from_bits(6, 0);
+        let a = walk(&pattern, start, &config, &mut StdRng::seed_from_u64(205));
+        let b = walk(&pattern, start, &config, &mut StdRng::seed_from_u64(205));
+        assert_eq!(
+            (a.host, a.flips, a.best_copies),
+            (b.host, b.flips, b.best_copies)
+        );
+        assert_eq!(a.diagnostics.penalty_updates, b.diagnostics.penalty_updates);
+        assert!(a.diagnostics.penalty_updates > 3);
+        assert!(a.diagnostics.penalty_constraints <= 7);
+        assert_eq!(a.status, "step-limit");
+        assert_eq!(a.best_copies, Some(brute(pattern, a.host)));
+        for checkpoint in a.diagnostics.archive {
+            assert_eq!(checkpoint.copies, brute(pattern, checkpoint.host));
+        }
     }
 
     #[test]
@@ -572,6 +751,7 @@ mod tests {
             makes: vec![1, 1, 0],
             breaks: vec![9, 9, 6],
             pairs: vec![],
+            ..Score::default()
         };
         assert_eq!(
             single_choices(&score, &[0; 3], 0, 2, Moves::Focused),
@@ -591,9 +771,7 @@ mod tests {
         let counter = Counter::new(&pattern);
         for h in [1, 3, 7, 45, 613, 771] {
             let host = Graph::from_bits(5, h);
-            let score = counter
-                .evaluate::<true>(host, Instant::now(), None)
-                .unwrap();
+            let score = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
             let choices = pair_choices(&score, host, &[0; 10], 0, score.copies, 100);
             for (a, b) in choices {
                 let next = Graph::from_bits(5, h ^ (1 << a) ^ (1 << b));
@@ -612,9 +790,7 @@ mod tests {
             let counter = Counter::new(&pattern);
             for h in 0..64 {
                 let host = Graph::from_bits(4, h);
-                let score = counter
-                    .evaluate::<true>(host, Instant::now(), None)
-                    .unwrap();
+                let score = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
                 for b in 1..6 {
                     for a in 0..b {
                         let next = Graph::from_bits(4, h ^ (1 << a) ^ (1 << b));
@@ -639,7 +815,7 @@ mod tests {
             let pattern = Graph::from_bits(14, f);
             let host = Graph::from_bits(14, h);
             let score = Counter::new(&pattern)
-                .evaluate::<true>(host, Instant::now(), None)
+                .evaluate::<2>(host, Instant::now(), None)
                 .unwrap();
             assert_eq!(score.copies, q);
             for (scope, expected) in [(Moves::Focused, focused), (Moves::All, all)] {

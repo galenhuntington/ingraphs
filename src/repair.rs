@@ -17,6 +17,26 @@ use std::time::{Duration, Instant};
 
 mod counted;
 mod neighbourhood;
+mod penalty;
+
+#[derive(Debug, clap::Args)]
+pub struct CountArgs {
+    /// Host order (up to this build's MAX_SIZE)
+    size: usize,
+    /// Decimal candidate F
+    candidate: BitNum,
+    /// Hosts to score (decimal or graph6, first CSV column)
+    path: String,
+    /// Seconds per host, zero disables; incomplete counts are never reported
+    #[arg(long, default_value_t = 1.0)]
+    seconds: f64,
+    #[arg(long, default_value_t = 1)]
+    jobs: usize,
+}
+
+pub fn count_hosts(args: CountArgs) {
+    counted::count_hosts(args);
+}
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum Method {
@@ -47,6 +67,8 @@ pub struct Diagnostics {
     pub pair_moves: u64,
     pub outside_moves: u64,
     pub best_step: u64,
+    pub penalty_updates: u64,
+    pub penalty_constraints: usize,
 }
 
 #[derive(Debug, clap::Args)]
@@ -67,6 +89,21 @@ pub struct Args {
     /// Try exact two-edge scores every kth non-improving decision; zero disables
     #[arg(long, default_value_t = 0)]
     pair_every: u64,
+    /// Boost violated-copy penalties every kth weighted stall; zero disables
+    #[arg(long, default_value_t = 0)]
+    penalty_every: u64,
+    /// Extra weight per retained violated copy at a penalty update
+    #[arg(long, default_value_t = 1)]
+    penalty_step: u32,
+    /// Maximum labelled copy masks in penalty memory (FIFO eviction)
+    #[arg(long, default_value_t = 4096)]
+    penalty_cap: usize,
+    /// Halve extra weights every kth penalty update; zero disables
+    #[arg(long, default_value_t = 64)]
+    penalty_decay: u64,
+    /// Maximum distinct violated copies retained per colour per evaluation
+    #[arg(long, default_value_t = 64)]
+    penalty_batch: usize,
     /// Maximum archived host classes per counted walk; zero disables
     #[arg(long, default_value_t = 8)]
     archive: usize,
@@ -126,6 +163,11 @@ pub struct Config {
     pub tabu: usize,
     pub moves: Moves,
     pub pair_every: u64,
+    pub penalty_every: u64,
+    pub penalty_step: u32,
+    pub penalty_cap: usize,
+    pub penalty_decay: u64,
+    pub penalty_batch: usize,
     pub archive: usize,
     pub archive_slack: u64,
     pub depth: usize,
@@ -143,6 +185,11 @@ impl Default for Config {
             tabu: 7,
             moves: Moves::All,
             pair_every: 0,
+            penalty_every: 0,
+            penalty_step: 1,
+            penalty_cap: 4096,
+            penalty_decay: 64,
+            penalty_batch: 64,
             archive: 8,
             archive_slack: 32,
             depth: 4,
@@ -152,6 +199,30 @@ impl Default for Config {
             batch: 32,
             noise: 0.3,
         }
+    }
+}
+
+impl Config {
+    fn validate_penalties(&self) {
+        if self.penalty_every == 0 {
+            return;
+        }
+        assert!(
+            matches!(self.method, Method::Counted),
+            "penalties require --method counted"
+        );
+        assert_eq!(
+            self.pair_every, 0,
+            "penalties currently require --pair-every 0"
+        );
+        assert!(
+            self.penalty_cap > 0 && self.penalty_batch > 0,
+            "penalty-cap and penalty-batch must be positive"
+        );
+        assert!(
+            (1..=1_000_000).contains(&self.penalty_step),
+            "penalty-step must be in 1..=1000000"
+        );
     }
 }
 
@@ -333,6 +404,7 @@ impl Bank {
 /// or the named finite limit. Embedding calls are exact and not interruptible;
 /// the time limit is consequently soft by at most one call.
 pub fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) -> Outcome {
+    config.validate_penalties();
     assert_eq!(pattern.size, start.size);
     assert!((1..=MAX_SIZE).contains(&pattern.size));
     let variables = Graph::triangle(pattern.size);
@@ -504,6 +576,11 @@ pub fn run(args: Args) {
         tabu: args.tabu,
         moves: args.moves,
         pair_every: args.pair_every,
+        penalty_every: args.penalty_every,
+        penalty_step: args.penalty_step,
+        penalty_cap: args.penalty_cap,
+        penalty_decay: args.penalty_decay,
+        penalty_batch: args.penalty_batch,
         archive: args.archive,
         archive_slack: args.archive_slack,
         depth: args.depth,
@@ -513,8 +590,9 @@ pub fn run(args: Args) {
         batch: args.batch,
         noise: args.noise,
     };
+    config.validate_penalties();
     println!(
-        "n,candidate,refuter,status,restart,walk_seed,flips,checks,constraints,violated,seconds,oracle_seconds,start_host,saved_host,distance,best_copies,method,source_seed,record,pair_evaluations,pair_moves,outside_moves,best_step"
+        "n,candidate,refuter,status,restart,walk_seed,flips,checks,constraints,violated,seconds,oracle_seconds,start_host,saved_host,distance,best_copies,method,source_seed,record,pair_evaluations,pair_moves,outside_moves,best_step,penalty_updates,penalty_constraints"
     );
     std::io::stdout().flush().unwrap();
     rayon::ThreadPoolBuilder::new()
@@ -583,7 +661,7 @@ pub fn run(args: Args) {
                     let mut out = std::io::stdout().lock();
                     writeln!(
                         out,
-                        "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:?},{},outcome,{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:?},{},outcome,{},{},{},{},{},{}",
                         args.size,
                         pattern.bits(),
                         refuter,
@@ -609,13 +687,15 @@ pub fn run(args: Args) {
                         outcome.diagnostics.pair_moves,
                         outcome.diagnostics.outside_moves,
                         outcome.diagnostics.best_step,
+                        outcome.diagnostics.penalty_updates,
+                        outcome.diagnostics.penalty_constraints,
                     )
                     .unwrap();
                     for checkpoint in &outcome.diagnostics.archive {
                         // Timing and evaluation totals belong to the outcome row
                         // only. These are seeds, never extra certificates.
                         writeln!(out,
-                            "{},{},,checkpoint,{},{},{},0,0,0,0,0,{},{},{},{},{:?},{},checkpoint,0,0,0,{}",
+                            "{},{},,checkpoint,{},{},{},0,0,0,0,0,{},{},{},{},{:?},{},checkpoint,0,0,0,{},0,0",
                             args.size, pattern.bits(), restart, seed, checkpoint.flips,
                             start.bits(), checkpoint.host.bits(),
                             (start.bits() ^ checkpoint.host.bits()).count_ones(), checkpoint.copies,
