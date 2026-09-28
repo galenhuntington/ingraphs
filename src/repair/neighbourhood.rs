@@ -89,6 +89,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
         elapsed: search.timer.elapsed(),
         oracle_time: search.oracle_time,
         best_copies: (status == "refuted").then_some(0),
+        diagnostics: Diagnostics::default(),
     }
 }
 
@@ -108,6 +109,7 @@ mod tests {
             max_constraints: 100,
             batch: 1,
             noise: 0.3,
+            ..Config::default()
         };
         for _ in 0..80 {
             let pattern = random_graph(&mut rng, 4);

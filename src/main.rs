@@ -473,6 +473,12 @@ enum C {
         size: usize,
         /// Graphs file
         path: String,
+        /// Use the fast internal canonical labels, not the least-decimal form
+        #[arg(long)]
+        internal_labels: bool,
+        /// Identify a graph and its complement (requires --internal-labels)
+        #[arg(long, requires = "internal_labels")]
+        complement: bool,
     },
     /// Output matrices for Nauty's "amtog".
     Matrix {
@@ -654,11 +660,18 @@ pub fn main() {
             let gr = Graph::from_bits(size, bits);
             free_close(&gr, tools::read_graphs(size, &path));
         }
-        C::Canon { size, path } => {
+        C::Canon { size, path, internal_labels, complement } => {
             use std::io::Write;
             let mut out = std::io::BufWriter::new(std::io::stdout().lock());
             for g in tools::read_graphs::<Graph>(size, &path) {
-                writeln!(out, "{}", enumerate::to_best(&g).bits()).unwrap();
+                let canonical = if internal_labels {
+                    let key = canon::key(&g);
+                    let key = if complement { key.min(canon::key(&g.complement())) } else { key };
+                    key.graph(size)
+                } else {
+                    enumerate::to_best(&g)
+                };
+                writeln!(out, "{}", canonical.bits()).unwrap();
             }
         }
         C::Matrix { size, path } => {

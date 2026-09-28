@@ -2,6 +2,8 @@
 //! Enumerate copies with <=1 wrong-coloured edge in each colour. Monochromatic
 //! copies contribute to `makes` on every edge; one-wrong copies contribute to
 //! `breaks` on their sole wrong edge. No host symmetry pruning is allowed here.
+//! Optional pair scoring visits <=2 wrong edges and accumulates the exact
+//! interaction correction to the sum of the two single-edge deltas.
 
 use super::*;
 use crate::base::{index, rev_index};
@@ -11,6 +13,17 @@ struct Score {
     copies: u64,
     makes: Vec<u64>,
     breaks: Vec<u64>,
+    pairs: Vec<i64>,
+}
+
+impl Score {
+    fn delta(&self, edge: usize) -> i64 {
+        self.breaks[edge] as i64 - self.makes[edge] as i64
+    }
+
+    fn pair_delta(&self, a: usize, b: usize) -> i64 {
+        self.delta(a) + self.delta(b) + self.pairs[index(a, b)]
+    }
 }
 
 struct Counter {
@@ -22,11 +35,10 @@ struct Counter {
     multiplicity: u64,
 }
 
-struct Search<'a> {
+struct Search<'a, const PAIRS: bool> {
     counter: &'a Counter,
     host_adj: [u32; MAX_SIZE],
-    domains: [u32; MAX_SIZE],
-    full_domains: [u32; MAX_SIZE],
+    domains: [[u32; MAX_SIZE]; 3],
     required: [u32; MAX_SIZE],
     images: [usize; MAX_SIZE],
     score: &'a mut Score,
@@ -77,11 +89,25 @@ impl Counter {
 
     // A timed-out enumeration yields NO score, not a partial lower score.
     fn score(&self, host: Graph, timer: Instant, deadline: Option<Duration>) -> Option<Score> {
+        self.evaluate::<false>(host, timer, deadline)
+    }
+
+    fn evaluate<const PAIRS: bool>(
+        &self,
+        host: Graph,
+        timer: Instant,
+        deadline: Option<Duration>,
+    ) -> Option<Score> {
         let variables = Graph::triangle(self.size);
         let mut score = Score {
             copies: 0,
             makes: vec![0; variables],
             breaks: vec![0; variables],
+            pairs: if PAIRS {
+                vec![0; Graph::triangle(variables)]
+            } else {
+                Vec::new()
+            },
         };
         for host in [host, host.complement()] {
             let mut host_adj = [0u32; MAX_SIZE];
@@ -90,24 +116,20 @@ impl Counter {
                 host_adj[a] |= 1 << b;
                 host_adj[b] |= 1 << a;
             }
-            let mut domains = [0u32; MAX_SIZE];
-            let mut full_domains = [0u32; MAX_SIZE];
+            let mut domains = [[0u32; MAX_SIZE]; 3];
             for &v in &self.order {
                 for (w, row) in host_adj[..self.size].iter().enumerate() {
-                    // At most one incident pattern edge may be missing.
-                    if row.count_ones() + 1 >= self.adjacent[v].count_ones() {
-                        domains[v] |= 1 << w;
-                    }
-                    if row.count_ones() >= self.adjacent[v].count_ones() {
-                        full_domains[v] |= 1 << w;
+                    for remaining in 0..=if PAIRS { 2 } else { 1 } {
+                        if row.count_ones() + remaining as u32 >= self.adjacent[v].count_ones() {
+                            domains[remaining][v] |= 1 << w;
+                        }
                     }
                 }
             }
-            let mut search = Search {
+            let mut search = Search::<PAIRS> {
                 counter: self,
                 host_adj,
                 domains,
-                full_domains,
                 required: [0; MAX_SIZE],
                 images: [ABSENT; MAX_SIZE],
                 score: &mut score,
@@ -125,11 +147,15 @@ impl Counter {
             debug_assert_eq!(*value % self.multiplicity, 0);
             *value /= self.multiplicity;
         }
+        for value in &mut score.pairs {
+            debug_assert_eq!(*value % self.multiplicity as i64, 0);
+            *value /= self.multiplicity as i64;
+        }
         Some(score)
     }
 }
 
-impl Search<'_> {
+impl<const PAIRS: bool> Search<'_, PAIRS> {
     // false means interrupted; otherwise this subtree has been fully counted.
     fn go(&mut self, depth: usize, used: u32, edge_set: BitNum, wrong: BitNum) -> bool {
         self.nodes += 1;
@@ -142,20 +168,44 @@ impl Search<'_> {
                 for edge in bits(edge_set) {
                     self.score.makes[edge] += 1;
                 }
-            } else {
+            } else if wrong.count_ones() == 1 {
                 self.score.breaks[wrong.trailing_zeros() as usize] += 1;
+            }
+            if PAIRS {
+                // A monochromatic copy was subtracted twice by two makes;
+                // a one-wrong copy was added by its sole wrong flip, but a
+                // simultaneous right flip destroys it; a two-wrong copy is
+                // created only by the pair. Hence +1, -1, +1 respectively.
+                match wrong.count_ones() {
+                    0 => {
+                        for b in bits(edge_set) {
+                            for a in bits(edge_set & ((1 << b) - 1)) {
+                                self.score.pairs[index(a, b)] += 1;
+                            }
+                        }
+                    }
+                    1 => {
+                        let a = wrong.trailing_zeros() as usize;
+                        for b in bits(edge_set & !wrong) {
+                            self.score.pairs[index(a, b)] -= 1;
+                        }
+                    }
+                    2 => {
+                        let a = wrong.trailing_zeros() as usize;
+                        let b = (wrong & (wrong - 1)).trailing_zeros() as usize;
+                        self.score.pairs[index(a, b)] += 1;
+                    }
+                    _ => unreachable!(),
+                }
             }
             return true;
         }
         let v = self.counter.order[depth];
-        // Once the wrong edge has been placed, its endpoints are both used;
-        // all later vertices need their entire pattern degree in this colour.
-        let mut choices = if wrong == 0 {
-            self.domains[v]
-        } else {
-            self.full_domains[v]
-        } & !used;
-        if wrong != 0 {
+        // Already missing edges have both endpoints placed, so later vertices
+        // may lose at most the remaining wrong-edge budget in their degree.
+        let remaining = (if PAIRS { 2 } else { 1 }) - wrong.count_ones();
+        let mut choices = self.domains[remaining as usize][v] & !used;
+        if remaining == 0 {
             let mut r = self.required[v];
             while r != 0 {
                 let u = r.trailing_zeros() as usize;
@@ -173,14 +223,16 @@ impl Search<'_> {
             choices &= choices - 1;
             let required = self.required[v];
             let missing = required & !self.host_adj[w];
-            if missing.count_ones() > u32::from(wrong == 0) {
+            if missing.count_ones() > remaining {
                 continue;
             }
-            let next_wrong = if missing == 0 {
-                wrong
-            } else {
-                1 << index(w, missing.trailing_zeros() as usize)
-            };
+            let mut next_wrong = wrong;
+            let mut missing_edges = missing;
+            while missing_edges != 0 {
+                let u = missing_edges.trailing_zeros() as usize;
+                missing_edges &= missing_edges - 1;
+                next_wrong |= 1 << index(w, u);
+            }
             let mut next_edges = edge_set;
             let mut r = required;
             while r != 0 {
@@ -209,6 +261,129 @@ impl Search<'_> {
     }
 }
 
+// Keep a bounded sample of distinct near-best classes. Score has priority;
+// ties use a stable per-walk pseudo-random rank, without consuming move RNG.
+// This needs no unbounded set of every host/class previously encountered.
+struct Archive {
+    capacity: usize,
+    slack: u64,
+    salt: u64,
+    entries: Vec<(crate::canon::Key, u64, Checkpoint)>,
+}
+
+fn host_key(host: &Graph) -> crate::canon::Key {
+    crate::canon::key(host).min(crate::canon::key(&host.complement()))
+}
+
+impl Archive {
+    fn new(config: &Config, start: Graph) -> Self {
+        Self {
+            capacity: config.archive,
+            slack: config.archive_slack,
+            salt: stream_seed(0x61726368697665, start.bits(), 0),
+            entries: Vec::new(),
+        }
+    }
+
+    fn offer(&mut self, host: Graph, copies: u64, best: u64, flips: u64) {
+        if self.capacity == 0 {
+            return;
+        }
+        let ceiling = best.saturating_add(self.slack);
+        self.entries.retain(|(_, _, c)| c.copies <= ceiling);
+        if copies > ceiling {
+            return;
+        }
+        if self.entries.len() == self.capacity && copies > self.entries.last().unwrap().2.copies {
+            return;
+        }
+        let key = host_key(&host);
+        if self.entries.iter().any(|(k, _, _)| *k == key) {
+            return;
+        }
+        let priority = stream_seed(self.salt, key.graph(host.size).bits(), 0);
+        self.entries.push((
+            key,
+            priority,
+            Checkpoint {
+                host,
+                copies,
+                flips,
+            },
+        ));
+        self.entries.sort_by_key(|(k, p, c)| (c.copies, *p, *k));
+        self.entries.truncate(self.capacity);
+    }
+
+    fn finish(self, best_host: Graph) -> Vec<Checkpoint> {
+        if self.entries.is_empty() {
+            return Vec::new();
+        }
+        let best_key = host_key(&best_host);
+        self.entries
+            .into_iter()
+            .filter(|(k, _, _)| *k != best_key)
+            .map(|(_, _, c)| c)
+            .collect()
+    }
+}
+
+fn single_choices(score: &Score, tabu: &[u64], flips: u64, best: u64, moves: Moves) -> Vec<usize> {
+    let focused = |v: usize| moves == Moves::All || score.makes[v] != 0;
+    let mut choices: Vec<_> = (0..score.makes.len())
+        .filter(|&v| {
+            focused(v) && (tabu[v] <= flips || score.copies as i64 + score.delta(v) < best as i64)
+        })
+        .collect();
+    if choices.is_empty() {
+        choices = (0..score.makes.len()).filter(|&v| focused(v)).collect();
+    }
+    choices
+}
+
+fn pair_choices(
+    score: &Score,
+    host: Graph,
+    tabu: &[u64],
+    flips: u64,
+    best: u64,
+    single_delta: i64,
+) -> Vec<(usize, usize)> {
+    let mut choices = Vec::new();
+    let mut pair_best = single_delta;
+    let mut current_key = None;
+    for b in 1..score.makes.len() {
+        for a in 0..b {
+            let delta = score.pair_delta(a, b);
+            if delta >= single_delta || delta > pair_best {
+                continue;
+            }
+            if (tabu[a] > flips || tabu[b] > flips) && score.copies as i64 + delta >= best as i64 {
+                continue;
+            }
+            // In particular, swapping two almost-twin vertex labels can be a
+            // two-edge move. Do not spend the pair budget on an isomorphic or
+            // complementary version of the CURRENT host. Only delta=0 can do
+            // this, so most moves need no canonicalization at all.
+            if delta == 0 {
+                let key = *current_key.get_or_insert_with(|| host_key(&host));
+                let next = Graph::from_bits(host.size, host.bits() ^ (1 << a) ^ (1 << b));
+                if host_key(&next) == key {
+                    continue;
+                }
+            }
+            if delta < pair_best {
+                pair_best = delta;
+                choices.clear();
+            }
+            if delta == pair_best {
+                choices.push((a, b));
+            }
+        }
+    }
+    choices
+}
+
 pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) -> Outcome {
     let timer = Instant::now();
     let deadline = (config.seconds > 0.0).then(|| Duration::from_secs_f64(config.seconds));
@@ -216,6 +391,9 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
     let mut host = start;
     let mut best_host = start;
     let mut best = None;
+    let mut diagnostics = Diagnostics::default();
+    let mut archive = Archive::new(config, start);
+    let mut stalled_decisions = 0u64;
     let mut flips = 0;
     let mut checks = 0;
     let mut oracle_time = Duration::ZERO;
@@ -233,7 +411,9 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
         if best.is_none_or(|b| score.copies < b) {
             best = Some(score.copies);
             best_host = host;
+            diagnostics.best_step = flips;
         }
+        archive.offer(host, score.copies, best.unwrap(), flips);
         if score.copies == 0 {
             // Keep the existing, separately implemented absence oracle as the
             // acceptance gate even though the full count is itself exact.
@@ -243,7 +423,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
             checks += 2;
             break "refuted";
         }
-        if flips == config.steps {
+        if flips >= config.steps {
             break "step-limit";
         }
         if deadline.is_some_and(|d| timer.elapsed() >= d) {
@@ -260,27 +440,48 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
             );
             next_progress = timer.elapsed() + Duration::from_secs(10);
         }
-        let delta = |v: usize| score.breaks[v] as i64 - score.makes[v] as i64;
-        let mut choices: Vec<_> = (0..variables)
-            .filter(|&v| {
-                score.makes[v] != 0
-                    && (tabu_until[v] <= flips
-                        || (score.copies as i64 + delta(v)) < best.unwrap() as i64)
-            })
-            .collect();
-        if choices.is_empty() {
-            choices = (0..variables).filter(|&v| score.makes[v] != 0).collect();
+        let mut choices = single_choices(&score, &tabu_until, flips, best.unwrap(), config.moves);
+        let min_delta = choices.iter().map(|&v| score.delta(v)).min().unwrap();
+        if min_delta >= 0 {
+            stalled_decisions += 1;
         }
-        let min_delta = choices.iter().map(|&v| delta(v)).min().unwrap();
+        if min_delta >= 0
+            && config.pair_every != 0
+            && stalled_decisions % config.pair_every == 0
+            && config.steps - flips >= 2
+        {
+            let before = Instant::now();
+            let paired = counter.evaluate::<true>(host, timer, deadline);
+            oracle_time += before.elapsed();
+            checks += 2;
+            diagnostics.pair_evaluations += 1;
+            let Some(paired) = paired else {
+                break "time-limit";
+            };
+            assert_eq!(paired.copies, score.copies);
+            let pairs = pair_choices(&paired, host, &tabu_until, flips, best.unwrap(), min_delta);
+            if let Some(&(a, b)) = pairs.choose(rng) {
+                host.edges.0.0 ^= (1 << a) | (1 << b);
+                flips += 2;
+                tabu_until[a] = flips.saturating_add(config.tabu as u64);
+                tabu_until[b] = flips.saturating_add(config.tabu as u64);
+                diagnostics.pair_moves += 1;
+                diagnostics.outside_moves +=
+                    u64::from(score.makes[a] == 0) + u64::from(score.makes[b] == 0);
+                continue;
+            }
+        }
         let random = min_delta >= 0 && rng.gen_bool(config.noise);
         if !random {
-            choices.retain(|&v| delta(v) == min_delta);
+            choices.retain(|&v| score.delta(v) == min_delta);
         }
         let edge = *choices.choose(rng).unwrap();
         host.edges.0.0 ^= 1 << edge;
         flips += 1;
         tabu_until[edge] = flips.saturating_add(config.tabu as u64);
+        diagnostics.outside_moves += u64::from(score.makes[edge] == 0);
     };
+    diagnostics.archive = archive.finish(best_host);
     Outcome {
         host: best_host,
         status,
@@ -291,6 +492,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
         elapsed: timer.elapsed(),
         oracle_time,
         best_copies: best,
+        diagnostics,
     }
 }
 
@@ -320,13 +522,29 @@ mod tests {
             let counter = Counter::new(&pattern);
             let host = random_graph(&mut rng, 5);
             let score = counter.score(host, Instant::now(), None).unwrap();
+            let paired = counter
+                .evaluate::<true>(host, Instant::now(), None)
+                .unwrap();
             assert_eq!(score.copies, brute(pattern, host));
+            assert_eq!(score.copies, paired.copies);
+            assert_eq!(score.makes, paired.makes);
+            assert_eq!(score.breaks, paired.breaks);
             for v in 0..10 {
                 let next = Graph::from_bits(5, host.bits() ^ (1 << v));
                 assert_eq!(
                     score.copies as i64 + score.breaks[v] as i64 - score.makes[v] as i64,
                     brute(pattern, next) as i64
                 );
+                for u in 0..v {
+                    let next = Graph::from_bits(5, host.bits() ^ (1 << v) ^ (1 << u));
+                    assert_eq!(
+                        score.copies as i64 + paired.pair_delta(u, v),
+                        brute(pattern, next) as i64,
+                        "pattern={}, host={}, pair=({u},{v})",
+                        pattern.bits(),
+                        host.bits()
+                    );
+                }
             }
         }
     }
@@ -340,5 +558,157 @@ mod tests {
                 .score(pattern, Instant::now(), Some(Duration::ZERO))
                 .is_none()
         );
+        assert!(
+            counter
+                .evaluate::<true>(pattern, Instant::now(), Some(Duration::ZERO))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn outside_moves_can_be_cheaper_and_tabu_still_applies() {
+        let score = Score {
+            copies: 2,
+            makes: vec![1, 1, 0],
+            breaks: vec![9, 9, 6],
+            pairs: vec![],
+        };
+        assert_eq!(
+            single_choices(&score, &[0; 3], 0, 2, Moves::Focused),
+            vec![0, 1]
+        );
+        let all = single_choices(&score, &[0; 3], 0, 2, Moves::All);
+        assert_eq!(all.into_iter().min_by_key(|&v| score.delta(v)), Some(2));
+        assert_eq!(
+            single_choices(&score, &[0, 0, 7], 0, 2, Moves::All),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn pairs_do_not_just_relabel_the_current_host() {
+        let pattern = Graph::from_bits(5, 7);
+        let counter = Counter::new(&pattern);
+        for h in [1, 3, 7, 45, 613, 771] {
+            let host = Graph::from_bits(5, h);
+            let score = counter
+                .evaluate::<true>(host, Instant::now(), None)
+                .unwrap();
+            let choices = pair_choices(&score, host, &[0; 10], 0, score.copies, 100);
+            for (a, b) in choices {
+                let next = Graph::from_bits(5, h ^ (1 << a) ^ (1 << b));
+                assert_ne!(host_key(&host), host_key(&next));
+            }
+        }
+    }
+
+    #[test]
+    fn exhaustive_four_vertex_pair_deltas() {
+        for f in 0..64u64 {
+            if f.count_ones() < 2 {
+                continue;
+            }
+            let pattern = Graph::from_bits(4, f as BitNum);
+            let counter = Counter::new(&pattern);
+            for h in 0..64 {
+                let host = Graph::from_bits(4, h);
+                let score = counter
+                    .evaluate::<true>(host, Instant::now(), None)
+                    .unwrap();
+                for b in 1..6 {
+                    for a in 0..b {
+                        let next = Graph::from_bits(4, h ^ (1 << a) ^ (1 << b));
+                        assert_eq!(
+                            score.copies as i64 + score.pair_delta(a, b),
+                            brute(pattern, next) as i64
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(all(feature = "nauty", not(feature = "u64")))]
+    #[test]
+    fn frontier_minima_have_cheaper_genuine_pair_escapes() {
+        for (f, h, q, focused, all, paired) in [
+            (208095050752, 149391117928587412994558940, 2, 10, 8, 3),
+            (35391346720704, 1735057707038897413644043761, 5, 19, 14, 9),
+            (35391346720704, 240446773475227354961364772, 5, 9, 9, 6),
+        ] {
+            let pattern = Graph::from_bits(14, f);
+            let host = Graph::from_bits(14, h);
+            let score = Counter::new(&pattern)
+                .evaluate::<true>(host, Instant::now(), None)
+                .unwrap();
+            assert_eq!(score.copies, q);
+            for (scope, expected) in [(Moves::Focused, focused), (Moves::All, all)] {
+                let choices = single_choices(&score, &[0; 91], 0, q, scope);
+                assert_eq!(
+                    q as i64 + choices.iter().map(|&e| score.delta(e)).min().unwrap(),
+                    expected
+                );
+            }
+            let pairs = pair_choices(&score, host, &[0; 91], 0, q, all - q as i64);
+            assert!(!pairs.is_empty());
+            assert!(
+                pairs
+                    .iter()
+                    .all(|&(a, b)| q as i64 + score.pair_delta(a, b) == paired)
+            );
+        }
+    }
+
+    #[test]
+    fn archives_are_exact_bounded_diverse_and_do_not_change_walks() {
+        let pattern = Graph::from_bits(5, 7);
+        let counter = Counter::new(&pattern);
+        let config = Config {
+            archive: 4,
+            archive_slack: 3,
+            seconds: 0.0,
+            steps: 80,
+            pair_every: 1,
+            ..Config::default()
+        };
+        let start = Graph::from_bits(5, 0);
+        let mut archive = Archive::new(&config, start);
+        for h in 0..1024 {
+            let host = Graph::from_bits(5, h);
+            let q = counter.score(host, Instant::now(), None).unwrap().copies;
+            archive.offer(host, q, 0, h as u64);
+            assert!(archive.entries.len() <= 4);
+        }
+        let entries = archive.finish(start);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|c| host_key(&c.host))
+                .collect::<HashSet<_>>()
+                .len(),
+            4
+        );
+        for c in entries {
+            assert_eq!(c.copies, brute(pattern, c.host));
+            assert!(c.copies <= 3);
+        }
+        let a = walk(&pattern, start, &config, &mut StdRng::seed_from_u64(183));
+        let b = walk(
+            &pattern,
+            start,
+            &Config {
+                archive: 0,
+                ..config
+            },
+            &mut StdRng::seed_from_u64(183),
+        );
+        assert_eq!(
+            (a.host, a.flips, a.status, a.best_copies),
+            (b.host, b.flips, b.status, b.best_copies)
+        );
+        if a.status == "refuted" {
+            assert_eq!(brute(pattern, a.host), 0);
+        }
     }
 }

@@ -25,6 +25,30 @@ pub enum Method {
     Neighbourhood,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Moves {
+    /// Restrict single flips to edges of a current monochromatic copy (old behaviour)
+    Focused,
+    /// Also allow preparatory flips outside all current monochromatic copies
+    All,
+}
+
+#[derive(Clone, Debug)]
+pub struct Checkpoint {
+    pub host: Graph,
+    pub copies: u64,
+    pub flips: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct Diagnostics {
+    pub archive: Vec<Checkpoint>,
+    pub pair_evaluations: u64,
+    pub pair_moves: u64,
+    pub outside_moves: u64,
+    pub best_step: u64,
+}
+
 #[derive(Debug, clap::Args)]
 pub struct Args {
     /// Host order (up to this build's MAX_SIZE)
@@ -34,9 +58,21 @@ pub struct Args {
     /// Exact counts, learned constraints, or copy-directed bounded edit search
     #[arg(long, value_enum, default_value_t = Method::Counted)]
     method: Method,
-    /// Recent edges excluded from counted moves (unless improving the best score)
+    /// Tabu tenure in flips (unless a move improves the best score)
     #[arg(long, default_value_t = 7)]
     tabu: usize,
+    /// Eligible single-edge moves; improving single flips are always focused anyway
+    #[arg(long, value_enum, default_value_t = Moves::All)]
+    moves: Moves,
+    /// Try exact two-edge scores every kth non-improving decision; zero disables
+    #[arg(long, default_value_t = 0)]
+    pair_every: u64,
+    /// Maximum archived host classes per counted walk; zero disables
+    #[arg(long, default_value_t = 8)]
+    archive: usize,
+    /// Archive only hosts within this many copies of the walk's best score
+    #[arg(long, default_value_t = 32)]
+    archive_slack: u64,
     /// Maximum distance from the seed for the neighbourhood method
     #[arg(long, default_value_t = 4)]
     depth: usize,
@@ -52,6 +88,9 @@ pub struct Args {
     /// Independent attempts per candidate (fresh state each time)
     #[arg(long, default_value_t = 8)]
     restarts: usize,
+    /// First restart index, for reproducible independently scheduled attempts
+    #[arg(long, default_value_t = 0)]
+    restart_offset: usize,
     /// Flips per walk, or visited non-root states in neighbourhood search
     #[arg(long, default_value_t = 1_000_000)]
     steps: u64,
@@ -85,12 +124,35 @@ pub struct Args {
 pub struct Config {
     pub method: Method,
     pub tabu: usize,
+    pub moves: Moves,
+    pub pair_every: u64,
+    pub archive: usize,
+    pub archive_slack: u64,
     pub depth: usize,
     pub steps: u64,
     pub seconds: f64,
     pub max_constraints: usize,
     pub batch: usize,
     pub noise: f64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            method: Method::Counted,
+            tabu: 7,
+            moves: Moves::All,
+            pair_every: 0,
+            archive: 8,
+            archive_slack: 32,
+            depth: 4,
+            steps: 1_000_000,
+            seconds: 10.0,
+            max_constraints: 100_000,
+            batch: 32,
+            noise: 0.3,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -106,6 +168,7 @@ pub struct Outcome {
     pub oracle_time: Duration,
     /// Exact score at the saved host (counted method, or zero for a found refuter).
     pub best_copies: Option<u64>,
+    pub diagnostics: Diagnostics,
 }
 
 const ABSENT: usize = usize::MAX;
@@ -301,6 +364,7 @@ pub fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) ->
             elapsed: timer.elapsed(),
             oracle_time,
             best_copies: None,
+            diagnostics: Diagnostics::default(),
         };
     }
     let mut bank = Bank::new(start, pattern.edge_count());
@@ -384,6 +448,7 @@ pub fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) ->
         elapsed: timer.elapsed(),
         oracle_time,
         best_copies: None,
+        diagnostics: Diagnostics::default(),
     }
 }
 
@@ -437,6 +502,10 @@ pub fn run(args: Args) {
     let config = Config {
         method: args.method,
         tabu: args.tabu,
+        moves: args.moves,
+        pair_every: args.pair_every,
+        archive: args.archive,
+        archive_slack: args.archive_slack,
         depth: args.depth,
         steps: args.steps,
         seconds: args.seconds,
@@ -445,7 +514,7 @@ pub fn run(args: Args) {
         noise: args.noise,
     };
     println!(
-        "n,candidate,refuter,status,restart,walk_seed,flips,checks,constraints,violated,seconds,oracle_seconds,start_host,saved_host,distance,best_copies,method,source_seed"
+        "n,candidate,refuter,status,restart,walk_seed,flips,checks,constraints,violated,seconds,oracle_seconds,start_host,saved_host,distance,best_copies,method,source_seed,record,pair_evaluations,pair_moves,outside_moves,best_step"
     );
     std::io::stdout().flush().unwrap();
     rayon::ThreadPoolBuilder::new()
@@ -480,12 +549,15 @@ pub fn run(args: Args) {
                     pattern.bits(),
                     usize::MAX,
                 )));
-                let mut seed_index = 0;
-                for restart in 0..args.restarts {
+                let end = args.restart_offset.checked_add(args.restarts).expect("restart index overflow");
+                for restart in args.restart_offset..end {
                     let seed = stream_seed(args.rng_seed, pattern.bits(), restart);
                     let mut rng = StdRng::seed_from_u64(seed);
                     let random = seeds.is_empty()
                         || (args.random_every != 0 && (restart + 1) % args.random_every == 0);
+                    // Number of seeded attempts before this one. Unlike a mutable
+                    // cursor, this also works for independently scheduled restarts.
+                    let seed_index = restart - if args.random_every == 0 { 0 } else { restart / args.random_every };
                     let source_seed = if random {
                         None
                     } else {
@@ -495,7 +567,6 @@ pub fn run(args: Args) {
                         random_graph(&mut rng, args.size)
                     } else {
                         let h = seeds[order[seed_index % order.len()]];
-                        seed_index += 1;
                         h.renumber(&Perm::random(&mut rng, args.size))
                     };
                     let mut edges: Vec<usize> = (0..Graph::triangle(args.size)).collect();
@@ -512,7 +583,7 @@ pub fn run(args: Args) {
                     let mut out = std::io::stdout().lock();
                     writeln!(
                         out,
-                        "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:?},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:?},{},outcome,{},{},{},{}",
                         args.size,
                         pattern.bits(),
                         refuter,
@@ -534,8 +605,23 @@ pub fn run(args: Args) {
                             .unwrap_or_default(),
                         args.method,
                         source_seed.map(|x| x.to_string()).unwrap_or_default(),
+                        outcome.diagnostics.pair_evaluations,
+                        outcome.diagnostics.pair_moves,
+                        outcome.diagnostics.outside_moves,
+                        outcome.diagnostics.best_step,
                     )
                     .unwrap();
+                    for checkpoint in &outcome.diagnostics.archive {
+                        // Timing and evaluation totals belong to the outcome row
+                        // only. These are seeds, never extra certificates.
+                        writeln!(out,
+                            "{},{},,checkpoint,{},{},{},0,0,0,0,0,{},{},{},{},{:?},{},checkpoint,0,0,0,{}",
+                            args.size, pattern.bits(), restart, seed, checkpoint.flips,
+                            start.bits(), checkpoint.host.bits(),
+                            (start.bits() ^ checkpoint.host.bits()).count_ones(), checkpoint.copies,
+                            args.method, source_seed.map(|x| x.to_string()).unwrap_or_default(), checkpoint.flips,
+                        ).unwrap();
+                    }
                     out.flush().unwrap();
                     eprintln!(
                         "repair F={} restart={}: {}, {:.2}s, {} flips, {} constraints",
@@ -572,6 +658,7 @@ mod tests {
                 max_constraints: 1000,
                 batch: 4,
                 noise: 0.3,
+                ..Config::default()
             };
             let a = walk(&pattern, start, &config, &mut StdRng::seed_from_u64(92));
             let b = walk(&pattern, start, &config, &mut StdRng::seed_from_u64(92));
@@ -657,6 +744,7 @@ mod tests {
             max_constraints: 2000,
             batch: 3,
             noise: 0.3,
+            ..Config::default()
         };
         let mut rng = StdRng::seed_from_u64(405);
         let mut found = 0;
@@ -690,6 +778,7 @@ mod tests {
             max_constraints: 100,
             batch: 1,
             noise: 0.3,
+            ..Config::default()
         };
         let mut rng = StdRng::seed_from_u64(4);
         assert_eq!(walk(&pattern, cycle, &config, &mut rng).status, "refuted");

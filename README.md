@@ -123,7 +123,7 @@ falling back to the full pool if none do. Every fourth restart is random;
 `--random-every 0` uses only supplied seeds. `--perturb k` changes exactly k
 distinct edges before a walk. Default builds currently support n <= 16.
 
-CSV output streams one row per restart and stops that candidate after a hit.
+CSV output streams an `outcome` row per restart and stops that candidate after a hit.
 `refuter` is filled **only** after both colours pass an exact absence check.
 `saved_host` holds the best scored host for `counted`, the last host for
 `learned`, or the seed for an unsuccessful `neighbourhood` search. Labels
@@ -137,13 +137,74 @@ plus two final absence checks on success; an interrupted evaluation may not
 have reached its second colour. For `neighbourhood`, `flips` counts distinct
 visited non-root states, not the distance of the final host from the seed.
 
+Counted walks now default to `--moves all`: a flip need not touch a current
+monochromatic copy. Improving single flips always do touch one, but allowing
+other edges can make escape moves much cheaper. `--moves focused` retains
+the old restriction. `--tabu` is the number of subsequent flips an edge is
+excluded for, unless changing it would beat the walk's best score. `--noise`
+is the probability of a random allowed single flip when the best allowed
+single flip is non-improving; it is not a probability applied at every step.
+
+`--pair-every 8` optionally scores **all pairs of distinct edges** at every
+eighth non-improving decision. It chooses a pair only if its exact joint
+delta beats the best allowed single flip, respecting tabu/aspiration. Pairs
+equivalent to just relabelling or complementing the current host are skipped.
+Both edges count against `--steps`. This costs an extra traversal through
+two-wrong-edge copies; it is disabled by default (`--pair-every 0`), and can
+reduce the number of flips substantially at the same wall-clock budget.
+Pair choices consider all edges regardless of `--moves`.
+
+`--archive 8 --archive-slack 32` keeps a bounded sample of distinct
+isomorphism/complement classes within 32 copies of the best visited score.
+Lower scores take priority; ties use a deterministic per-walk sampling rank.
+The best host is always saved separately. Archive records have
+`record=checkpoint`, `status=checkpoint`, and no `refuter`; their scores are
+complete exact counts. They stream with the outcome when a restart finishes.
+`--archive 0` restores outcome-only output. Canonicalization is used only to
+compare classes, never to change a live walk's labels. Archive size does not
+grow with walk length.
+
+Use `record=outcome` when counting attempts or comparing flip totals.
+Checkpoint/seed rows have zero timing and evaluation totals to avoid double
+counting; an archive row's `flips` says when that host was first retained.
+New diagnostics include `pair_evaluations`, `pair_moves`, `outside_moves`
+(edge flips outside the current copy support), and `best_step`.
+
 Continue from the best hosts **for each candidate**, without mixing them up:
 
 ```sh
 python3 scripts/refine_repair.py output/repair14.csv \
-    --keep 3 --restarts 8 --seconds 30 --perturb 4 --jobs 4 \
+    --candidates output/batches/all14 --keep 8 \
+    --restarts 8 --seconds 30 --perturb 4 --jobs 4 \
     --rng-seed 20260927 > output/repair14-refined.csv 2> output/repair14-refined.log
 ```
+
+Here `--keep` counts exact **isomorphism/complement classes**, not labelled
+rows. The helper deduplicates before truncating, using
+`graphy canon --internal-labels --complement` (ordinary `canon` is unchanged).
+Selected input seeds are copied into the output as `record=seed`, so a later
+short/perturbed run cannot silently discard the input's best checkpoint.
+Pass multiple old CSVs to recover diversity that older runs discarded.
+`--prepare-only` writes this selected pool (and any cross-hits), without
+launching walks; the resulting CSV is directly resumable.
+`--max-score` is an absolute copy-count ceiling on eligible seeds;
+`--archive-slack` is a relative allowance within each new walk.
+
+The helper schedules **individual restarts**, including for a single selected
+`--candidate NUMBER`, so `--jobs 6` can use six cores in a focused campaign.
+The Rust command itself still parallelizes candidates. `--restart-offset`
+preserves restart identities when splitting a campaign, provided the seed
+pool and other parameters stay fixed. Time-limited traces still depend on
+machine load. The helper defaults to `--tabu 3 --noise 0.2`; the Rust command
+retains defaults 7 and 0.3 respectively.
+
+Selected input seeds, input certificates, and newly found witnesses are
+checked against the other selected
+candidates with the separate existence matcher. Cross-hits are emitted as
+ordinary verified refutations with `record=cross-refutation`. Future jobs
+for a refuted candidate are skipped; already running jobs finish (at most
+`jobs-1` extra attempts). `--no-share` disables cross-checking. Neither
+filtering nor sharing edits your survivor files.
 
 Alternative methods:
 
@@ -165,7 +226,9 @@ python3 research/verify_refutations.py output/repair14-certs.csv
 
 The verifier intentionally rejects an empty certificate file. Controls,
 measurements, near-misses, and longer-run suggestions are in
-[the September 26 research note](research/2026-09-26.md).
+[the September 26 research note](research/2026-09-26.md). The archive,
+escape-move and pair-scoring follow-up is in
+[the September 27 note](research/2026-09-27.md).
 
 ## Some graphs
 
