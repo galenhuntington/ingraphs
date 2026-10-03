@@ -309,6 +309,9 @@ enum C {
     IngraphRepair(repair::Args),
     /// Exact monochromatic copy counts, without computing repair moves
     IngraphCount(repair::CountArgs),
+    /// Incremental SAT block repair (requires the sat Cargo feature)
+    #[cfg(feature = "sat")]
+    IngraphSat(repair::sat::Args),
     /// Enumerate all graphs
     #[command(arg_required_else_help = true)]
     Enumerate {
@@ -532,6 +535,8 @@ pub fn main() {
     match args.command {
         C::IngraphRepair(args) => repair::run(args),
         C::IngraphCount(args) => repair::count_hosts(args),
+        #[cfg(feature = "sat")]
+        C::IngraphSat(args) => repair::sat::run(args),
         C::Enumerate { size } => {
             enumerate(size, None, &[]);
         }

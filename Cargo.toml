@@ -25,6 +25,8 @@ default = ["nauty"]
 nauty = ["dep:cc"]
 # Optimize the C backend for the build machine (not a portable binary).
 native = ["nauty"]
+# Incremental SAT repair; the pinned binding bundles CaDiCaL 2.2.1.
+sat = ["dep:rustsat", "dep:rustsat-cadical"]
 u64 = []
 
 [build-dependencies]
@@ -40,3 +42,5 @@ utc-dt = "0.3.0"
 clap = { version = "4.5.28", features = ["derive"] }
 rayon = "1.10.0"
 dashmap = "6.1.0"
+rustsat = { version = "=0.7.5", default-features = false, optional = true }
+rustsat-cadical = { version = "=0.7.5", features = ["v2-2-1"], optional = true }

@@ -28,7 +28,7 @@ impl Score {
     }
 }
 
-struct Counter {
+pub(super) struct Counter {
     size: usize,
     order: Vec<usize>,
     adjacent: [u32; MAX_SIZE],
@@ -48,10 +48,11 @@ struct Search<'a, const WRONG: u32> {
     deadline: Option<Duration>,
     nodes: u64,
     witness_limit: usize,
+    stop_at_witness_limit: bool,
 }
 
 impl Counter {
-    fn new(pattern: &Graph) -> Self {
+    pub(super) fn new(pattern: &Graph) -> Self {
         let mut adjacent = [0u32; MAX_SIZE];
         for edge in bits(pattern.bits()) {
             let (a, b) = rev_index(edge);
@@ -155,6 +156,7 @@ impl Counter {
                 deadline,
                 nodes: 0,
                 witness_limit,
+                stop_at_witness_limit: false,
             };
             if !search.go(0, 0, 0, 0) {
                 return None;
@@ -177,6 +179,57 @@ impl Counter {
         }
         Some(score)
     }
+
+    /// Bounded witness collection for SAT separation. A partial traversal
+    /// supplies valid clauses, but never an exact score or an absence claim.
+    #[cfg(feature = "sat")]
+    pub(super) fn collect(
+        &self,
+        host: Graph,
+        timer: Instant,
+        deadline: Option<Duration>,
+        per_color: usize,
+    ) -> (Vec<BitNum>, Option<u64>) {
+        assert!(per_color > 0);
+        let mut score = Score::default();
+        let mut complete = true;
+        for host in [host, host.complement()] {
+            let mut host_adj = [0u32; MAX_SIZE];
+            for edge in bits(host.bits()) {
+                let (a, b) = rev_index(edge);
+                host_adj[a] |= 1 << b;
+                host_adj[b] |= 1 << a;
+            }
+            let mut domains = [[0u32; MAX_SIZE]; 3];
+            for &v in &self.order {
+                for (w, row) in host_adj[..self.size].iter().enumerate() {
+                    if row.count_ones() >= self.adjacent[v].count_ones() {
+                        domains[0][v] |= 1 << w;
+                    }
+                }
+            }
+            let witness_limit = score.witnesses.len() + per_color;
+            let mut search = Search::<0> {
+                counter: self,
+                host_adj,
+                domains,
+                required: [0; MAX_SIZE],
+                images: [ABSENT; MAX_SIZE],
+                score: &mut score,
+                timer,
+                deadline,
+                nodes: 0,
+                witness_limit,
+                stop_at_witness_limit: true,
+            };
+            complete &= search.go(0, 0, 0, 0);
+        }
+        let copies = complete.then(|| {
+            assert_eq!(score.copies % self.multiplicity, 0);
+            score.copies / self.multiplicity
+        });
+        (score.witnesses.into_iter().collect(), copies)
+    }
 }
 
 impl<const WRONG: u32> Search<'_, WRONG> {
@@ -196,6 +249,9 @@ impl<const WRONG: u32> Search<'_, WRONG> {
                 }
                 if self.score.witnesses.len() < self.witness_limit {
                     self.score.witnesses.insert(edge_set);
+                }
+                if self.stop_at_witness_limit && self.score.witnesses.len() >= self.witness_limit {
+                    return false;
                 }
             } else if wrong.count_ones() == 1 {
                 self.score.breaks[wrong.trailing_zeros() as usize] += 1;

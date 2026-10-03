@@ -280,6 +280,106 @@ escape-move and pair-scoring follow-up is in
 screening the old free-close seeds are covered in
 [the September 28 note](research/2026-09-28.md).
 
+### Incremental SAT block repair (optional)
+
+`ingraph-sat` uses RustSAT **0.7.5**, pinned to its bundled **CaDiCaL 2.2.1**.
+It is a separate experimental command; existing repair commands and default
+builds do not require SAT. Building the optional feature needs C/C++ compilers
+and **libclang** for bindgen, but no system CaDiCaL or Python SAT package.
+For the Nix toolchain:
+
+```sh
+nix-shell -p rustPlatform.bindgenHook --run 'cargo build -r --features native,sat'
+```
+
+The Nix hook supplies libclang and its header-search environment. Merely finding
+the host system's libclang may fail when it is loaded by a Nix-built executable.
+On other toolchains, install the normal libclang development package and use
+`cargo build -r --features sat` (set `LIBCLANG_PATH` if it is not discovered).
+`native` optimizes Nauty; optionally set `CXXFLAGS=-march=native` to also optimize
+CaDiCaL for this CPU. Such binaries are not portable to older CPUs.
+
+A focused example, using the two four-copy n=15 seeds:
+
+```sh
+python3 scripts/sat_repair.py research/repair15-seeds-2026-09-28-followup.csv \
+    --candidate 105898625070080 --keep 2 --restarts 2 --jobs 2 \
+    --blocks 8 --block-size 48 --seconds 5 --max-constraints 500000 \
+    --rng-seed 20261002 > output/sat15.csv 2> output/sat15.log
+```
+
+The Python helper only selects candidate-specific seeds and schedules independent
+Rust processes. It accepts earlier repair CSVs and its own output. Within each
+process, successive blocks share clauses and solver learning. Results flush
+after every block. On Ctrl-C or SIGTERM the helper terminates its active children.
+It does not automatically cross-check hits against other candidates.
+
+Important parameter meanings:
+
+- `--block-size K` frees K edges, fixing all other edges to a chosen seed.
+  This is **not** a radius-K search: it explores all assignments of that particular
+  edge subset. Zero frees all edges. Seeds are cycled across blocks.
+  `--free-edges MASK` instead prescribes the exact decimal edge subset, useful
+  for replaying a logged block or checking a known feasible repair region.
+- `--block-mode directed` greedily hits current copies, then fills roughly half
+  the block from their edge support and the remainder uniformly. It permits
+  both colours to change. `random` samples the entire block uniformly.
+- `--seconds` is **per block**, including oracle work, not per restart. The
+  limit is cooperative/soft; setup and final independent existence checks are
+  not hard-interruptible. Zero disables the clock; `--rounds` still bounds SAT calls.
+- `--batch` caps distinct witnesses per colour per oracle call (default 64).
+  A capped/interrupted traversal never supplies an exact copy count or absence
+  claim. More witnesses strengthen the formula but cost memory and solver work.
+- `--max-constraints` caps stored full copy masks, each producing two clauses.
+  Hitting the cap stops that process. `--reset-every K` instead allows periodic
+  fresh solvers, sacrificing accumulated learning. Default zero retains state.
+  This is not a hard total-memory limit: SAT's internally learned clauses also
+  use memory.
+- `--restarts` in the helper starts fresh independent solver processes; `--jobs`
+  bounds concurrency, including for a single candidate. `--restart-offset` and
+  `--rng-seed` permit additional streams. `--relabel` diversifies seed labels;
+  `--factor` enables optional bounded variable addition. Both default off.
+
+All retained clauses describe **full labelled copies**, never clauses simplified
+under a previous block's fixed edges. The fixed values are temporary assumptions.
+The solver proposes a colouring, the graph oracle adds clauses for monochromatic
+copies, and the loop repeats. A provisional SAT model is not itself a refuter.
+Success also passes the separate existence matcher in both colours.
+
+CSV statuses distinguish `refuted`, `block-unsat`, `time-limit`, `sat-limit`,
+`round-limit`, and `constraint-limit`. `block-unsat` rules out only the printed
+`start_host`/`free_edges` subcube. An unrestricted UNSAT result is deliberately
+labelled `unrestricted-unsat-unverified`: this tool does **not** emit checked
+universality proofs. Timeouts and resource limits establish no infeasibility.
+
+`best_copies` refers only to fully counted hosts; a blank is unknown, not zero.
+`saved_host` is the best such host (or the anchor if none was completely counted);
+`last_host` records the last SAT proposal. `constraints` is cumulative per solver,
+while `added_constraints`, times, rounds and search statistics are per block.
+The exact solver signature, anchor, free-edge mask and failed-assumption variable
+mask (`core_edges`) are logged. A failed core need not be minimal.
+
+For a single seed without the Python helper:
+
+```sh
+target/release/graphy ingraph-sat 15 105898625070080 \
+    --seeds 4554531801452033082124616721190 --blocks 4 --block-size 40 \
+    --seconds 5 --dump-dir output/sat-debug > output/sat-debug.csv
+```
+
+`--dump-dir` optionally saves the collected DIMACS clauses plus that block's
+fixed-edge units for replay. Existing files are never overwritten. These files
+are formulas, **not proof certificates**; satisfiability of a collected formula
+does not imply absence of uncollected copies. With the helper each task gets its
+own subdirectory. Audit any `refuted` rows with `research/verify_refutations.py`,
+using the same CSV filtering command as for ordinary repair above.
+
+Tests: `cargo test --features sat`, plus
+`python3 -m unittest discover -s scripts -p 'test_sat_repair.py'` after a SAT-enabled
+release build. The latter independently checks small returned graphs and
+exhaustively checks dumped small CNFs. Experiments and follow-up recommendations
+are recorded in [the October 2 note](research/2026-10-02.md).
+
 ## Some graphs
 
 Here are numeric representations of some graphs mentioned in the

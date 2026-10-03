@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 mod counted;
 mod neighbourhood;
 mod penalty;
+#[cfg(feature = "sat")]
+pub mod sat;
 
 #[derive(Debug, clap::Args)]
 pub struct CountArgs {
