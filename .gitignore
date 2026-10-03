@@ -1,3 +1,6 @@
-target
+*target
 output
+old
+.nvimrc
+.claude
 __pycache__/
