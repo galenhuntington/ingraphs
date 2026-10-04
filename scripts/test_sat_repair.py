@@ -74,7 +74,7 @@ class SatCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             rows = self.run_sat(n, f, "--seeds", "0,21", "--blocks", "4", "--block-size", "3",
                                 "--dump-dir", directory, "--batch", "1")
-            self.assertEqual(len(rows), 4)
+            self.assertTrue(1 <= len(rows) <= 4)
             for row in rows:
                 text = (Path(directory) / f"block-{int(row['block']):05}.cnf").read_text()
                 clauses = []
@@ -99,7 +99,14 @@ class SatCliTests(unittest.TestCase):
                 satisfiable = any(all(any(bool(h & (1 << (abs(lit) - 1))) == (lit > 0)
                                                for lit in clause) for clause in clauses) for h in range(64))
                 self.assertFalse(satisfiable)
-                self.assertEqual(row["status"], "block-unsat")
+                self.assertIn(row["status"], ["block-unsat", "unrestricted-unsat-unverified"])
+                if row["status"] == "unrestricted-unsat-unverified":
+                    # An empty failed-assumption core establishes UNSAT without
+                    # any fixed units, even if this was a restricted query.
+                    self.assertEqual(row["core_edges"], "0")
+                    permanent = [c for c in clauses if len(c) > 1]
+                    self.assertFalse(any(all(any(bool(h & (1 << (abs(lit)-1))) == (lit > 0)
+                                                 for lit in c) for c in permanent) for h in range(64)))
                 self.assertEqual(row["refuter"], "")
 
     def test_parallel_frontend_selects_candidate_specific_seeds(self):
@@ -116,6 +123,58 @@ class SatCliTests(unittest.TestCase):
         self.assertTrue(all(row["status"] == "block-unsat" for row in rows))
         bad = subprocess.run(command + ["--seconds", "nan"], input=seed_csv, text=True, capture_output=True)
         self.assertNotEqual(bad.returncode, 0)
+
+    def test_vertex_regions_and_dedup_survive_relabelling(self):
+        # Every three-vertex induced subgraph of a C5 is P3 or its complement;
+        # there is just one extension class, despite 10 labelled two-star sets.
+        for extra in [[], ["--relabel"]]:
+            rows = self.run_sat(5, 7, "--seeds", "613", "--blocks", "20", "--rounds", "0",
+                                "--block-mode", "vertex", "--vertices", "2", *extra)
+            row, = rows
+            self.assertEqual(row["status"], "refuted")
+            self.assertEqual(row["block_mode"], "Vertex")
+            selected = int(row["free_vertices"])
+            self.assertEqual(selected.bit_count(), 2)
+            expected = sum(1 << (v * (v-1)//2+u) for v in range(5) for u in range(v)
+                           if selected & ((1 << u) | (1 << v)))
+            self.assertEqual(int(row["free_edges"]), expected)
+            self.assertEqual(int(row["free_size"]), 7)
+        # A non-refuting anchor must also stop when its distinct core classes
+        # have been attempted, without treating zero-round outcomes as UNSAT.
+        rows = self.run_sat(5, 7, "--seeds", "0,1023", "--blocks", "20", "--rounds", "0",
+                            "--block-mode", "vertex", "--vertices", "2")
+        row, = rows
+        self.assertEqual(row["status"], "round-limit")
+        self.assertEqual(row["refuter"], "")
+
+    def test_vertex_frontend_validation_and_forwarding(self):
+        seed_csv = "n,candidate,saved_host,best_copies,status\n5,7,0,10,time-limit\n"
+        command = [sys.executable, str(Path(__file__).with_name("sat_repair.py")), "/dev/stdin",
+                   "--restarts", "1", "--jobs", "1", "--blocks", "20", "--rounds", "0",
+                   "--block-mode", "vertex", "--vertices", "2"]
+        proc = subprocess.run(command, input=seed_csv, text=True, capture_output=True, check=True)
+        row, = list(csv.DictReader(io.StringIO(proc.stdout)))
+        self.assertEqual((row["block_mode"], row["free_size"]), ("Vertex", "7"))
+        bad = subprocess.run(command + ["--vertices", "6"], input=seed_csv, text=True, capture_output=True)
+        self.assertNotEqual(bad.returncode, 0)
+
+    def test_core_expansion_keeps_labels_and_only_follows_unsat(self):
+        for extra in [[], ["--relabel"], ["--reset-every", "1"]]:
+            rows = self.run_sat(5, 7, "--seeds", "0", "--block-mode", "vertex", "--vertices", "1",
+                                "--max-vertices", "3", "--blocks", "8", "--batch", "2", *extra)
+            self.assertEqual([r["status"] for r in rows], ["block-unsat", "block-unsat", "refuted"])
+            self.assertEqual([int(r["free_vertices"]).bit_count() for r in rows], [1, 2, 3])
+            self.assertEqual(rows[0]["parent_block"], "")
+            for parent, child in zip(rows, rows[1:]):
+                self.assertEqual(child["parent_block"], parent["block"])
+                self.assertEqual(child["start_host"], parent["start_host"])
+                self.assertEqual(int(child["free_edges"]) & int(parent["free_edges"]), int(parent["free_edges"]))
+                self.assertTrue(int(child["free_edges"]) & int(parent["core_edges"]))
+        rows = self.run_sat(5, 7, "--seeds", "0", "--block-mode", "vertex", "--vertices", "1",
+                            "--max-vertices", "3", "--blocks", "8", "--rounds", "0")
+        row, = rows
+        self.assertEqual(row["status"], "round-limit")
+        self.assertEqual(row["parent_block"], "")
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "uses /proc to audit child cleanup")
     def test_sigterm_stops_active_solver_children(self):

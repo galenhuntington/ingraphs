@@ -286,14 +286,18 @@ screening the old free-close seeds are covered in
 It is a separate experimental command; existing repair commands and default
 builds do not require SAT. Building the optional feature needs C/C++ compilers
 and **libclang** for bindgen, but no system CaDiCaL or Python SAT package.
-For the Nix toolchain:
+If your shell already supplies a working libclang, use
+`cargo build -r --features native,sat` directly. A fallback for the Nix toolchain:
 
 ```sh
-nix-shell -p rustPlatform.bindgenHook --run 'cargo build -r --features native,sat'
+nix-shell -p rustPlatform.bindgenHook --run 'env -u NIX_ENFORCE_NO_NATIVE cargo build -r --features native,sat'
 ```
 
 The Nix hook supplies libclang and its header-search environment. Merely finding
 the host system's libclang may fail when it is loaded by a Nix-built executable.
+The explicit unset allows the requested `native` optimization; otherwise the Nix
+compiler wrapper may discard `-march=native`. A correctly configured
+`LIBCLANG_PATH` also avoids needing the temporary shell.
 On other toolchains, install the normal libclang development package and use
 `cargo build -r --features sat` (set `LIBCLANG_PATH` if it is not discovered).
 `native` optimizes Nauty; optionally set `CXXFLAGS=-march=native` to also optimize
@@ -324,6 +328,24 @@ Important parameter meanings:
 - `--block-mode directed` greedily hits current copies, then fills roughly half
   the block from their edge support and the remainder uniformly. It permits
   both colours to change. `random` samples the entire block uniformly.
+- `--block-mode vertex --vertices R` frees **every edge incident to R selected
+  vertices**, ignoring `--block-size`. The other n-R vertices retain their
+  induced graph. Four vertices free 46/50/54 edges at n=14/15/16 respectively.
+  The selector enumerates vertex subsets of the seed pool, deduplicates by
+  isomorphism **and complementation of that fixed induced graph**, then shuffles
+  the distinct classes. It tries at most one representative of each class per
+  run, even after a timeout; additional restarts can revisit them. Without seeds,
+  it makes one random seed for this catalogue. Catalogue preparation is outside
+  the per-block timer.
+- In vertex mode, `--max-vertices M` optionally expands an UNSAT region by one
+  whole vertex, up to M. The failed-assumption core ranks vertices by the number
+  of core edges they touch, with random tie-breaking. Each expansion keeps the
+  anchor and labels, shares the solver, and consumes another block/time budget.
+  Timeouts and other limits **do not** trigger expansion. A full core gives no
+  vertex preference; this is not core minimization. Expanded classes are also
+  deduplicated, and only one expansion branch is followed from each UNSAT region.
+  `--blocks` caps **all attempts**, including expansions; a finite catalogue can
+  finish sooner. Completion does not imply every larger region was explored.
 - `--seconds` is **per block**, including oracle work, not per restart. The
   limit is cooperative/soft; setup and final independent existence checks are
   not hard-interruptible. Zero disables the clock; `--rounds` still bounds SAT calls.
@@ -357,7 +379,12 @@ universality proofs. Timeouts and resource limits establish no infeasibility.
 `last_host` records the last SAT proposal. `constraints` is cumulative per solver,
 while `added_constraints`, times, rounds and search statistics are per block.
 The exact solver signature, anchor, free-edge mask and failed-assumption variable
-mask (`core_edges`) are logged. A failed core need not be minimal.
+mask (`core_edges`) are logged. A failed core need not be minimal. An empty core
+on UNSAT gives `unrestricted-unsat-unverified`, even in a restricted query.
+Vertex mode adds `free_vertices` (a vertex bit mask), `fixed_core` (an internal
+canonical key, compare only at the same remaining order), and `parent_block`
+(the UNSAT block that triggered expansion, otherwise blank). Core keys are not
+least-decimal forms or stable identifiers across canonicalizer versions.
 
 For a single seed without the Python helper:
 
@@ -379,6 +406,8 @@ Tests: `cargo test --features sat`, plus
 release build. The latter independently checks small returned graphs and
 exhaustively checks dumped small CNFs. Experiments and follow-up recommendations
 are recorded in [the October 2 note](research/2026-10-02.md).
+Whole-vertex blocks, core-guided expansion, fresh-solver comparisons and the
+complete two-vertex scans are in [the October 3 note](research/2026-10-03.md).
 
 ## Some graphs
 

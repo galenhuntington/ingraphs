@@ -12,12 +12,16 @@ use rustsat::types::{Lit, TernaryVal};
 use rustsat_cadical::{CaDiCaL, Limit};
 use std::path::{Path, PathBuf};
 
+mod blocks;
+
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum BlockMode {
     /// Half the block from current-copy support, then uniformly fill the rest
     Directed,
     /// Uniform edge subset, without consulting current-copy support
     Random,
+    /// Rewire whole vertex neighbourhoods, deduplicating fixed induced graphs
+    Vertex,
 }
 
 #[derive(Debug, clap::Args)]
@@ -32,10 +36,10 @@ pub struct Args {
     /// Additional seeds: decimal or graph6, FIRST CSV column (not repair CSVs)
     #[arg(long)]
     seed_file: Vec<String>,
-    /// Blocks per run, sharing clauses and solver learning
+    /// Maximum total attempts per run, including expansions, sharing solver state
     #[arg(long, default_value_t = 16)]
     blocks: usize,
-    /// Free edges per block; zero frees ALL host edges
+    /// Free edges per block; zero frees ALL host edges (ignored in vertex mode)
     #[arg(long, default_value_t = 32)]
     block_size: usize,
     /// Exact decimal free-edge mask, overriding block-size and block-mode
@@ -43,6 +47,12 @@ pub struct Args {
     free_edges: Option<BitNum>,
     #[arg(long, value_enum, default_value_t = BlockMode::Directed)]
     block_mode: BlockMode,
+    /// Vertices to rewire completely in vertex mode; all incident edges are free
+    #[arg(long, default_value_t = 4)]
+    vertices: usize,
+    /// After vertex-block UNSAT, free one more vertex guided by its core, up to this count
+    #[arg(long)]
+    max_vertices: Option<usize>,
     /// Seconds per block including witness collection; zero disables
     #[arg(long, default_value_t = 5.0)]
     seconds: f64,
@@ -61,7 +71,7 @@ pub struct Args {
     /// Recreate the solver every kth block; zero retains it for the whole run
     #[arg(long, default_value_t = 0)]
     reset_every: usize,
-    /// Independently relabel the selected seed before each block
+    /// Independently relabel initial blocks; expansions keep their parent's labels
     #[arg(long)]
     relabel: bool,
     /// Enable CaDiCaL's optional bounded variable addition preprocessing
@@ -417,7 +427,7 @@ fn block(
                 out.core = core;
                 // Even an unrestricted UNSAT result is not published as a proof:
                 // this exploratory command does not produce a checked proof log.
-                break if free.count_ones() as usize == engine.variables {
+                break if core == 0 || free.count_ones() as usize == engine.variables {
                     "unrestricted-unsat-unverified"
                 } else {
                     "block-unsat"
@@ -465,10 +475,25 @@ pub fn run(args: Args) {
     );
     if let Some(free) = args.free_edges {
         assert_eq!(free >> variables, 0, "free-edge mask exceeds host order");
+    } else if matches!(args.block_mode, BlockMode::Vertex) {
+        assert!(
+            (1..=args.size).contains(&args.vertices),
+            "vertices must be in 1..=n"
+        );
     } else {
         assert!(
             args.block_size <= variables,
             "block size exceeds edge count (use 0 for all)"
+        );
+    }
+    if let Some(maximum) = args.max_vertices {
+        assert!(
+            args.free_edges.is_none() && matches!(args.block_mode, BlockMode::Vertex),
+            "max-vertices requires vertex mode without free-edges"
+        );
+        assert!(
+            (args.vertices..=args.size).contains(&maximum),
+            "max-vertices must be in vertices..=n"
         );
     }
     assert!(args.blocks > 0 && args.batch > 0 && args.max_constraints > 0);
@@ -489,21 +514,42 @@ pub fn run(args: Args) {
     let seed = stream_seed(args.rng_seed, args.candidate, args.restart);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut engine = Engine::new(variables, seed, args.factor);
+    let vertex_blocks = if args.free_edges.is_none() && matches!(args.block_mode, BlockMode::Vertex)
+    {
+        if seeds.is_empty() {
+            seeds.push(random_graph(&mut rng, args.size));
+        }
+        let timer = Instant::now();
+        let (blocks, labelled) = blocks::vertex_blocks(&seeds, args.vertices, &mut rng);
+        eprintln!(
+            "Vertex regions F={}: {} classes from {} labelled subsets in {:.3}s; at most one attempt per class in this run, including timeouts",
+            args.candidate,
+            blocks.len(),
+            labelled,
+            timer.elapsed().as_secs_f64()
+        );
+        Some(blocks)
+    } else {
+        None
+    };
     let mode = if args.free_edges.is_some() {
         "Prescribed"
     } else {
         match args.block_mode {
             BlockMode::Directed => "Directed",
             BlockMode::Random => "Random",
+            BlockMode::Vertex => "Vertex",
         }
     };
     eprintln!(
-        "SAT: {}, F={}, {} blocks of {} edges, {}, seed={}, factor={}; local UNSAT is not universality",
+        "SAT: {}, F={}, up to {} blocks, initially {} free edges, {}, seed={}, factor={}; local UNSAT is not universality",
         engine.solver.signature(),
         args.candidate,
         args.blocks,
         args.free_edges.map_or_else(
-            || if args.block_size == 0 {
+            || if vertex_blocks.is_some() {
+                variables - Graph::triangle(args.size - args.vertices)
+            } else if args.block_size == 0 {
                 variables
             } else {
                 args.block_size
@@ -526,23 +572,61 @@ pub fn run(args: Args) {
         std::fs::create_dir_all(dir).unwrap();
     }
     println!(
-        "n,candidate,refuter,status,restart,block,walk_seed,start_host,free_edges,free_size,initial_copies,saved_host,best_copies,last_host,distance,rounds,checks,constraints,added_constraints,seconds,sat_seconds,oracle_seconds,conflicts,decisions,propagations,core_edges,solver,block_mode,factor,record"
+        "n,candidate,refuter,status,restart,block,walk_seed,start_host,free_edges,free_size,initial_copies,saved_host,best_copies,last_host,distance,rounds,checks,constraints,added_constraints,seconds,sat_seconds,oracle_seconds,conflicts,decisions,propagations,core_edges,solver,block_mode,factor,record,free_vertices,fixed_core,parent_block"
     );
     std::io::stdout().flush().unwrap();
+    let mut next_initial = 0;
+    let mut pending_expansion = None;
+    let mut attempted = HashSet::new();
     for b in 0..args.blocks {
+        let (mut region, parent) = if let Some((region, parent)) = pending_expansion.take() {
+            (Some(region), Some(parent))
+        } else if let Some(regions) = &vertex_blocks {
+            let Some(region) = regions.get(next_initial).copied() else {
+                eprintln!(
+                    "All initial vertex-region classes attempted (timeouts and unexplored expansions remain unresolved); this is not universality"
+                );
+                break;
+            };
+            next_initial += 1;
+            (Some(region), None)
+        } else {
+            (None, None)
+        };
         if b != 0 && args.reset_every != 0 && b % args.reset_every == 0 {
             engine = Engine::new(variables, seed.wrapping_add(b as u64), args.factor);
         }
-        let mut anchor = if seeds.is_empty() {
+        let mut free_vertices = region.map(|r| r.vertices);
+        let mut prescribed = args.free_edges.or(region.map(|r| r.free));
+        let mut anchor = if let Some(region) = region {
+            region.anchor
+        } else if seeds.is_empty() {
             random_graph(&mut rng, args.size)
         } else {
             seeds[b % seeds.len()]
         };
-        if args.relabel {
-            anchor = anchor.renumber(&Perm::random(&mut rng, args.size));
+        if args.relabel && parent.is_none() {
+            let perm = Perm::random(&mut rng, args.size);
+            anchor = anchor.renumber(&perm);
+            // Preserve the selected vertex region; explicit --free-edges keeps
+            // its old meaning as an exact mask in the resulting labels.
+            if region.is_some() {
+                prescribed =
+                    prescribed.map(|m| Graph::from_bits(args.size, m).renumber(&perm).bits());
+                free_vertices = free_vertices.map(|s| {
+                    (0..args.size)
+                        .filter(|v| s & (1 << v) != 0)
+                        .fold(0, |m, v| m | (1 << perm.apply(v)))
+                });
+                if let Some(ref mut r) = region {
+                    r.anchor = anchor;
+                    r.free = prescribed.unwrap();
+                    r.vertices = free_vertices.unwrap();
+                }
+            }
         }
         let out = block(&mut engine, &counter, &pattern, anchor, &config, |copies| {
-            args.free_edges.unwrap_or_else(|| {
+            prescribed.unwrap_or_else(|| {
                 choose_block(anchor, copies, args.block_size, args.block_mode, &mut rng)
             })
         });
@@ -552,7 +636,7 @@ pub fn run(args: Args) {
             String::new()
         };
         println!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},outcome",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.6},{},{},{},{},{},{},{},outcome,{},{},{}",
             args.size,
             args.candidate,
             refuter,
@@ -583,7 +667,10 @@ pub fn run(args: Args) {
             out.core,
             engine.solver.signature(),
             mode,
-            args.factor
+            args.factor,
+            free_vertices.map(|v| v.to_string()).unwrap_or_default(),
+            region.map(|r| r.fixed_key.to_string()).unwrap_or_default(),
+            parent.map(|p: usize| p.to_string()).unwrap_or_default()
         );
         std::io::stdout().flush().unwrap();
         eprintln!(
@@ -606,6 +693,16 @@ pub fn run(args: Args) {
                 anchor.bits(),
                 out.free,
             );
+        }
+        if let Some(region) = region {
+            assert!(attempted.insert(region.class()));
+            if out.status == "block-unsat" {
+                if let Some(maximum) = args.max_vertices {
+                    pending_expansion =
+                        blocks::expand(region, out.core, maximum, &attempted, &mut rng)
+                            .map(|next| (next, b));
+                }
+            }
         }
         if matches!(
             out.status,
@@ -630,7 +727,7 @@ mod tests {
         }
     }
 
-    fn naive_refutes(pattern: &Graph, host: Graph) -> bool {
+    pub(super) fn naive_refutes(pattern: &Graph, host: Graph) -> bool {
         crate::perm::all_perms(pattern.size).all(|p| {
             let copy = pattern.renumber(&p);
             !copy.is_subgraph_of(&host) && !copy.is_subgraph_of(&host.complement())

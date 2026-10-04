@@ -25,13 +25,15 @@ def command(args, key, seeds, restart):
     cmd = [args.binary, "ingraph-sat", str(n), str(candidate),
            "--seeds", ",".join(map(str, seeds)), "--restart", str(restart)]
     for option in ("blocks", "block_size", "block_mode", "seconds", "rounds", "batch",
-                   "max_constraints", "conflicts", "reset_every", "rng_seed"):
+                   "max_constraints", "conflicts", "reset_every", "rng_seed", "vertices"):
         cmd.extend(["--" + option.replace("_", "-"), str(getattr(args, option))])
     for flag in ("relabel", "factor"):
         if getattr(args, flag):
             cmd.append("--" + flag)
     if args.free_edges is not None:
         cmd.extend(["--free-edges", str(args.free_edges)])
+    if args.max_vertices is not None:
+        cmd.extend(["--max-vertices", str(args.max_vertices)])
     if args.dump_dir:
         cmd.extend(["--dump-dir", str(Path(args.dump_dir) / f"n{n}-f{candidate}-r{restart}")])
     return cmd
@@ -48,10 +50,12 @@ def main():
     parser.add_argument("--restarts", type=int, default=2, help="independent solver processes per candidate")
     parser.add_argument("--restart-offset", type=int, default=0)
     parser.add_argument("--jobs", type=int, default=3)
-    parser.add_argument("--blocks", type=int, default=16)
+    parser.add_argument("--blocks", type=int, default=16, help="maximum total attempts per run, including expansions")
     parser.add_argument("--block-size", type=int, default=32, help="free edges; 0 frees all edges")
     parser.add_argument("--free-edges", type=int, help="prescribed decimal edge mask, overrides block-size/mode")
-    parser.add_argument("--block-mode", choices=["directed", "random"], default="directed")
+    parser.add_argument("--block-mode", choices=["directed", "random", "vertex"], default="directed")
+    parser.add_argument("--vertices", type=int, default=4, help="whole vertices to rewire in vertex mode; overrides block-size")
+    parser.add_argument("--max-vertices", type=int, help="after vertex-block UNSAT, expand by one core-guided vertex up to this count")
     parser.add_argument("--seconds", type=float, default=5, help="per block, not per restart; 0 disables")
     parser.add_argument("--rounds", type=int, default=10000)
     parser.add_argument("--batch", type=int, default=64)
@@ -85,9 +89,16 @@ def main():
         parser.error("no eligible candidate-specific seeds")
     if args.free_edges is not None and any(not 0 <= args.free_edges < (1 << (n * (n - 1) // 2)) for n, _ in groups):
         parser.error("free-edges mask must fit every selected host order")
-    if args.free_edges is None and any(args.block_size > n * (n - 1) // 2 for n, _ in groups):
+    if args.free_edges is None and args.block_mode == "vertex" and any(not 1 <= args.vertices <= n for n, _ in groups):
+        parser.error("vertices must be in 1..n for every selected host order")
+    if args.free_edges is None and args.block_mode != "vertex" and any(args.block_size > n * (n - 1) // 2 for n, _ in groups):
         parser.error("block-size exceeds a selected host's edge count; use 0 to free all")
-    print(f"SAT campaign: {len(groups)} candidates x {args.restarts} independent runs x "
+    if args.max_vertices is not None:
+        if args.free_edges is not None or args.block_mode != "vertex":
+            parser.error("max-vertices requires vertex mode without free-edges")
+        if any(not args.vertices <= args.max_vertices <= n for n, _ in groups):
+            parser.error("max-vertices must be in vertices..n for every selected host order")
+    print(f"SAT campaign: {len(groups)} candidates x {args.restarts} independent runs x up to "
           f"{args.blocks} blocks, {args.seconds:g}s per block, {args.jobs} jobs", file=sys.stderr)
     output_lock, processes_lock = Lock(), Lock()
     active = set()
