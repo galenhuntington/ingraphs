@@ -312,7 +312,7 @@ python3 scripts/sat_repair.py research/repair15-seeds-2026-09-28-followup.csv \
     --rng-seed 20261002 > output/sat15.csv 2> output/sat15.log
 ```
 
-The Python helper only selects candidate-specific seeds and schedules independent
+The Python helper selects candidate-specific seeds and schedules independent
 Rust processes. It accepts earlier repair CSVs and its own output. Within each
 process, successive blocks share clauses and solver learning. Results flush
 after every block. On Ctrl-C or SIGTERM the helper terminates its active children.
@@ -354,7 +354,8 @@ Important parameter meanings:
   claim. More witnesses strengthen the formula but cost memory and solver work.
 - `--max-constraints` caps stored full copy masks, each producing two clauses.
   Hitting the cap stops that process. `--reset-every K` instead allows periodic
-  fresh solvers, sacrificing accumulated learning. Default zero retains state.
+  fresh solvers, sacrificing accumulated learning. Default zero retains state
+  in legacy mode; ledger mode defaults to one (a fresh solver per region).
   This is not a hard total-memory limit: SAT's internally learned clauses also
   use memory.
 - `--restarts` in the helper starts fresh independent solver processes; `--jobs`
@@ -402,12 +403,121 @@ own subdirectory. Audit any `refuted` rows with `research/verify_refutations.py`
 using the same CSV filtering command as for ordinary repair above.
 
 Tests: `cargo test --features sat`, plus
-`python3 -m unittest discover -s scripts -p 'test_sat_repair.py'` after a SAT-enabled
+`python3 -m unittest discover -s scripts -p 'test_sat*.py'` after a SAT-enabled
 release build. The latter independently checks small returned graphs and
 exhaustively checks dumped small CNFs. Experiments and follow-up recommendations
 are recorded in [the October 2 note](research/2026-10-02.md).
 Whole-vertex blocks, core-guided expansion, fresh-solver comparisons and the
 complete two-vertex scans are in [the October 3 note](research/2026-10-03.md).
+
+### Resumable vertex catalogues
+
+Use `--ledger PATH` for larger campaigns. This adds a Python-stdlib SQLite
+ledger; no new solver dependency. A region is identified by **host order,
+candidate, fixed-core order, and the fixed induced graph up to isomorphism and
+complementation**. It is not identified by the seed, labels, or restart number.
+Candidates retain their decimal identifiers; the launcher does not deduplicate
+isomorphic *candidate* identifiers.
+
+Import completed old campaigns once (the originals are never changed):
+
+```sh
+python3 scripts/sat_repair.py --ledger output/sat-regions.sqlite \
+    --import-only --import-csv output/sat14-vertex3-wide*.csv \
+    output/sat15-vertex3-wide*.csv output/sat16-vertex3-wide*.csv
+```
+
+The ledger at that path has already been populated during the October 5 session,
+including earlier October 3 vertex runs and recognizable prescribed-mask replays.
+Imports derive the core again from `start_host` and `free_vertices`, validate
+the free-edge mask, and canonicalize with the current executable. Prescribed
+masks are also accepted if they are **exactly** a union of whole vertex stars;
+other masks are counted and skipped. A malformed/truncated file rolls back its
+entire import. Do not import files still being written. Identical file contents
+are imported only once. New launcher CSVs additionally carry stable outcome
+tokens, so reimporting them into the same ledger does not count attempts twice.
+Legacy overlapping/repacked files can repeat attempt counts, but never multiply
+distinct regions. Keep original CSVs and logs for the detailed evidence.
+
+Register a larger seed catalogue and inspect the size **without running SAT**:
+
+```sh
+python3 scripts/sat_repair.py research/repair14-seeds-2026-09-28.csv \
+    --ledger output/sat-regions.sqlite --candidates output/batches/all14 \
+    --keep 32 --vertices 3 --blocks 0 --seconds 5 --jobs 5 --plan
+```
+
+`--plan` deliberately saves the catalogue. Then work directly from that ledger:
+
+```sh
+python3 scripts/sat_repair.py --ledger output/sat-regions.sqlite \
+    --order 14 --candidates output/batches/all14 --vertices 3 --work new \
+    --blocks 0 --seconds 5 --batch 8 --max-constraints 500000 --jobs 5 \
+    --rng-seed 2026100503 \
+    > output/sat14-ledger-new-1.csv 2> output/sat14-ledger-new-1.log
+```
+
+Use a fresh output filename each launch. Repeating this command uses remaining
+**new** regions, not completed ones. To retry only interrupted/limited regions:
+
+```sh
+python3 scripts/sat_repair.py --ledger output/sat-regions.sqlite \
+    --order 14 --candidates output/batches/all14 --vertices 3 --work retry \
+    --blocks 0 --seconds 120 --rounds 100000 --batch 8 \
+    --max-constraints 500000 --jobs 5 --chunk-size 1 --rng-seed 2026100504 \
+    > output/sat14-ledger-retry-1.csv 2> output/sat14-ledger-retry-1.log
+```
+
+Ledger-mode protocol:
+
+- `--work new` (default) selects never-completed attempts; `retry` selects regions
+  with only inconclusive outcomes; `all` selects both. **None selects UNSAT.**
+  Retrying means a fresh SAT search, not restoring a saved solver state. Change
+  budgets/RNG deliberately; there is no automatic budget escalation.
+- `--blocks B` caps **total scheduled regions per candidate**, across workers;
+  zero selects all eligible regions. This differs from legacy mode's per-restart
+  cap. `--jobs` changes concurrency, not coverage. `--chunk-size` defaults to 8:
+  workers take disjoint small chunks, including when only one candidate remains.
+  Use 1 for slow retries. A chunk's early exit leaves unattempted regions eligible.
+- `--restarts` must be 1 (also the new default in legacy mode). For another pass
+  use `--work retry`, not duplicated whole-catalogue restarts. `--reset-every`
+  defaults to 1 in ledger mode. Optional clause reuse is confined to each chunk.
+- Seed inputs add regions. With seed inputs, work is restricted to their selected
+  candidates, but includes previously registered regions for those candidates.
+  Without seed inputs, work comes from the ledger; use `--order`, `--candidates`,
+  and/or repeated `--candidate` to select it. `--vertices` selects one region size.
+  Fixed-size vertex mode is required; live `--max-vertices` expansion and arbitrary
+  edge masks remain available **without** a ledger. Expanded old outcomes can
+  still be imported and retried at their recorded size.
+- A completed row is committed before it is emitted to CSV. Ctrl-C/SIGTERM stops
+  and reaps children. A killed in-flight attempt has no completion record and
+  remains eligible. Verified refutation cancels the candidate's other jobs and
+  skips its remaining work. Other candidates are **not** automatically culled.
+- CSV adds `campaign_id`, `region_id` (local to this ledger), and `chunk_id`.
+  Native `block` is local to a chunk and native `restart` carries the chunk index.
+  The database stores campaign settings, executable digest, statuses, attempt
+  totals, provenance and refuters. Raw CSV retains detailed solver statistics.
+  Rebuilding graphy re-canonicalizes stored cores before the next writable launch;
+  internal Nauty labels are not assumed to be permanent identifiers.
+  Do not replace/rebuild the selected executable while a campaign is running.
+- Only one writable launcher may own a ledger; choose its `--jobs` accordingly.
+  `python3 scripts/sat_repair.py --ledger output/sat-regions.sqlite --status`
+  is a read-only snapshot and also works during an active campaign. Back up the
+  database after the writer exits, or use SQLite's backup facility; do not copy
+  just the main file while its WAL is active.
+- UNSAT is trusted as a **local solver result**, not a checked proof or a claim
+  that a candidate is universal. Imported refuters are rechecked with the separate
+  existence matcher. Contradictory terminal outcomes fail loudly.
+
+The launcher prints selected work and `regions × seconds` as a **soft summed
+worker-time ceiling**, not a wall-clock prediction. The timer is still cooperative;
+catalogue construction, startup, final checks and I/O are additional. For a bounded
+pilot, set e.g. `--blocks 32`; for full coverage use 0 only after checking `--plan`.
+The native plumbing is `ingraph-sat --list-regions` and `--region-file FILE`;
+the latter reads explicit `anchor,vertex-mask` pairs, without a header, in order.
+
+Imported coverage, the new n=16 results, measured next-run guidance, and the new
+refuter's structure are in [the October 5 note](research/2026-10-05.md).
 
 ## Some graphs
 

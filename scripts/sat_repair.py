@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Run incremental SAT block repair from candidate-specific repair CSV seeds.
 
-Each worker owns an independent graphy process and solver. Blocks within that
-process retain clauses and learning. Results stream immediately; inputs are
-never rewritten. Local UNSAT is not a universality certificate.
+Each worker owns an independent graphy process and solver. --ledger adds
+resumable, disjoint vertex-region scheduling; legacy mode uses independent
+restarts. Results stream immediately; inputs are never rewritten. Local UNSAT
+is not a universality certificate. See README for ledger-mode budget semantics.
 """
 
 import argparse
@@ -23,7 +24,9 @@ from refine_repair import BINARY, select_seeds, tasks
 def command(args, key, seeds, restart):
     n, candidate = key
     cmd = [args.binary, "ingraph-sat", str(n), str(candidate),
-           "--seeds", ",".join(map(str, seeds)), "--restart", str(restart)]
+           "--restart", str(restart)]
+    if seeds:
+        cmd.extend(["--seeds", ",".join(map(str, seeds))])
     for option in ("blocks", "block_size", "block_mode", "seconds", "rounds", "batch",
                    "max_constraints", "conflicts", "reset_every", "rng_seed", "vertices"):
         cmd.extend(["--" + option.replace("_", "-"), str(getattr(args, option))])
@@ -41,19 +44,19 @@ def command(args, key, seeds, restart):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("results", nargs="+")
+    parser.add_argument("results", nargs="*", help="candidate-specific seed CSVs; optional with a ledger")
     parser.add_argument("--binary", default=BINARY)
     parser.add_argument("--keep", type=int, default=4, help="best distinct seed classes per candidate")
     parser.add_argument("--max-score", type=int)
     parser.add_argument("--candidate", type=int, action="append")
     parser.add_argument("--candidates", help="current survivor file, decimal first column")
-    parser.add_argument("--restarts", type=int, default=2, help="independent solver processes per candidate")
+    parser.add_argument("--restarts", type=int, default=1, help="legacy independent runs per candidate; ledger mode requires 1")
     parser.add_argument("--restart-offset", type=int, default=0)
     parser.add_argument("--jobs", type=int, default=3)
-    parser.add_argument("--blocks", type=int, default=16, help="maximum total attempts per run, including expansions")
+    parser.add_argument("--blocks", type=int, default=16, help="legacy: attempts per run; ledger: TOTAL per candidate (0 = all eligible)")
     parser.add_argument("--block-size", type=int, default=32, help="free edges; 0 frees all edges")
     parser.add_argument("--free-edges", type=int, help="prescribed decimal edge mask, overrides block-size/mode")
-    parser.add_argument("--block-mode", choices=["directed", "random", "vertex"], default="directed")
+    parser.add_argument("--block-mode", choices=["directed", "random", "vertex"], help="default vertex with ledger, directed otherwise")
     parser.add_argument("--vertices", type=int, default=4, help="whole vertices to rewire in vertex mode; overrides block-size")
     parser.add_argument("--max-vertices", type=int, help="after vertex-block UNSAT, expand by one core-guided vertex up to this count")
     parser.add_argument("--seconds", type=float, default=5, help="per block, not per restart; 0 disables")
@@ -61,14 +64,39 @@ def main():
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--max-constraints", type=int, default=200000)
     parser.add_argument("--conflicts", type=int, default=0, help="per SAT call; 0 disables")
-    parser.add_argument("--reset-every", type=int, default=0)
+    parser.add_argument("--reset-every", type=int, help="default 1 with ledger, 0 otherwise")
     parser.add_argument("--rng-seed", type=int, default=0)
     parser.add_argument("--relabel", action="store_true")
     parser.add_argument("--factor", action="store_true")
     parser.add_argument("--dump-dir")
+    parser.add_argument("--ledger", help="SQLite region ledger; one writable launcher, read-only --status allowed")
+    parser.add_argument("--import-csv", nargs="+", action="extend", default=[], help="import completed SAT CSVs into ledger (contents deduplicated)")
+    parser.add_argument("--import-only", action="store_true", help="import, report ledger totals, then exit")
+    parser.add_argument("--status", action="store_true", help="report ledger totals without scheduling work")
+    parser.add_argument("--work", choices=["new", "retry", "all"], default="new", help="ledger eligibility; retry = attempted but unresolved, never UNSAT")
+    parser.add_argument("--order", type=int, action="append", dest="orders", help="ledger host-order filter; repeatable")
+    parser.add_argument("--chunk-size", type=int, default=8, help="ledger: at most this many regions per worker process")
+    parser.add_argument("--plan", action="store_true", help="register seed catalogue and print eligible work without running SAT")
     args = parser.parse_args()
-    if min(args.keep, args.restarts, args.jobs, args.blocks, args.batch, args.max_constraints) < 1:
-        parser.error("keep, restarts, jobs, blocks, batch, max-constraints must be positive")
+    if args.block_mode is None:
+        args.block_mode = "vertex" if args.ledger else "directed"
+    if args.reset_every is None:
+        args.reset_every = 1 if args.ledger else 0
+    if min(args.keep, args.restarts, args.jobs, args.batch, args.max_constraints, args.chunk_size) < 1:
+        parser.error("keep, restarts, jobs, batch, max-constraints, chunk-size must be positive")
+    if args.blocks < 0 or (not args.ledger and args.blocks == 0):
+        parser.error("blocks must be positive (or 0 for all eligible ledger regions)")
+    if args.ledger:
+        if args.block_mode != "vertex" or args.free_edges is not None or args.max_vertices is not None:
+            parser.error("ledger supports fixed-size vertex catalogues, without free-edges or max-vertices")
+        if args.restarts != 1 or args.restart_offset != 0:
+            parser.error("ledger schedules each region once; use --work retry in a later campaign, not restarts")
+        if not 1 <= args.vertices <= 32 or (args.orders and min(args.orders) < args.vertices):
+            parser.error("vertices must be positive and at most every selected order")
+    elif args.import_csv or args.import_only or args.status or args.plan or args.orders or args.work != "new":
+        parser.error("bookkeeping options require --ledger")
+    elif not args.results:
+        parser.error("seed CSVs required without --ledger")
     if min(args.restart_offset, args.block_size, args.rounds, args.conflicts, args.reset_every, args.rng_seed) < 0:
         parser.error("indices, block-size and budgets must be nonnegative")
     if args.conflicts > 2147483647 or args.rng_seed > 18446744073709551615:
@@ -80,12 +108,15 @@ def main():
         with open(args.candidates) as source:
             survivors = {int(line.split(",", 1)[0]) for line in source if line.strip()}
         candidates = survivors if candidates is None else candidates & survivors
+    args.selected_candidates = candidates
     groups = select_seeds(args.results, args.keep, args.max_score, binary=args.binary,
                           candidates=candidates,
                           report=lambda key, raw, classes, chosen: print(
                               f"SAT seeds n={key[0]} F={key[1]}: {chosen}/{classes} classes",
-                              file=sys.stderr, flush=True))
-    if not groups:
+                              file=sys.stderr, flush=True)) if args.results and not (args.import_only or args.status) else {}
+    if args.orders:
+        groups = {key: seeds for key, seeds in groups.items() if key[0] in args.orders}
+    if not groups and (args.results or not args.ledger) and not (args.import_only or args.status):
         parser.error("no eligible candidate-specific seeds")
     if args.free_edges is not None and any(not 0 <= args.free_edges < (1 << (n * (n - 1) // 2)) for n, _ in groups):
         parser.error("free-edges mask must fit every selected host order")
@@ -98,6 +129,10 @@ def main():
             parser.error("max-vertices requires vertex mode without free-edges")
         if any(not args.vertices <= args.max_vertices <= n for n, _ in groups):
             parser.error("max-vertices must be in vertices..n for every selected host order")
+    if args.ledger:
+        from sat_ledger import campaign
+        campaign(args, groups, command)
+        return
     print(f"SAT campaign: {len(groups)} candidates x {args.restarts} independent runs x up to "
           f"{args.blocks} blocks, {args.seconds:g}s per block, {args.jobs} jobs", file=sys.stderr)
     output_lock, processes_lock = Lock(), Lock()

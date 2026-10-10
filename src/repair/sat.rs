@@ -36,6 +36,12 @@ pub struct Args {
     /// Additional seeds: decimal or graph6, FIRST CSV column (not repair CSVs)
     #[arg(long)]
     seed_file: Vec<String>,
+    /// Print the deduplicated vertex catalogue without running SAT
+    #[arg(long, conflicts_with = "region_file")]
+    list_regions: bool,
+    /// Exact vertex regions, one anchor,vertex-mask pair per line (no header)
+    #[arg(long, conflicts_with_all = ["seeds", "seed_file", "free_edges", "max_vertices"])]
+    region_file: Option<PathBuf>,
     /// Maximum total attempts per run, including expansions, sharing solver state
     #[arg(long, default_value_t = 16)]
     blocks: usize,
@@ -468,6 +474,12 @@ pub fn run(args: Args) {
         "unsupported host order"
     );
     let variables = Graph::triangle(args.size);
+    if args.list_regions || args.region_file.is_some() {
+        assert!(
+            matches!(args.block_mode, BlockMode::Vertex) && args.free_edges.is_none(),
+            "catalogue/region-file requires vertex mode without free-edges"
+        );
+    }
     assert_eq!(
         args.candidate >> variables,
         0,
@@ -513,9 +525,32 @@ pub fn run(args: Args) {
     );
     let seed = stream_seed(args.rng_seed, args.candidate, args.restart);
     let mut rng = StdRng::seed_from_u64(seed);
-    let mut engine = Engine::new(variables, seed, args.factor);
-    let vertex_blocks = if args.free_edges.is_none() && matches!(args.block_mode, BlockMode::Vertex)
-    {
+    let vertex_blocks = if let Some(path) = &args.region_file {
+        let input = std::fs::read_to_string(path).expect("cannot read region file");
+        let mut seen = HashSet::new();
+        Some(
+            input
+                .lines()
+                .map(|line| {
+                    let (host, selected) =
+                        line.split_once(',').expect("expected anchor,vertex-mask");
+                    let host: BitNum = host.parse().expect("invalid anchor");
+                    let selected: u32 = selected.parse().expect("invalid vertex mask");
+                    assert_eq!(host >> variables, 0, "anchor exceeds host order");
+                    assert!(
+                        selected > 0 && selected >> args.size == 0,
+                        "invalid vertex mask"
+                    );
+                    let region = blocks::region(Graph::from_bits(args.size, host), selected);
+                    assert!(
+                        seen.insert(region.class()),
+                        "duplicate region in region-file"
+                    );
+                    region
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else if args.free_edges.is_none() && matches!(args.block_mode, BlockMode::Vertex) {
         if seeds.is_empty() {
             seeds.push(random_graph(&mut rng, args.size));
         }
@@ -532,6 +567,21 @@ pub fn run(args: Args) {
     } else {
         None
     };
+    if args.list_regions {
+        println!("n,candidate,start_host,free_vertices,fixed_core");
+        for region in vertex_blocks.unwrap() {
+            println!(
+                "{},{},{},{},{}",
+                args.size,
+                args.candidate,
+                region.anchor.bits(),
+                region.vertices,
+                region.fixed_key
+            );
+        }
+        return;
+    }
+    let mut engine = Engine::new(variables, seed, args.factor);
     let mode = if args.free_edges.is_some() {
         "Prescribed"
     } else {

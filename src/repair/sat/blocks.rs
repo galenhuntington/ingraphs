@@ -25,7 +25,7 @@ fn fixed_graph(host: Graph, vertices: u32) -> Graph {
     Graph::from_fn(kept.len(), |u, v| host.has_edge(kept[u], kept[v]))
 }
 
-fn region(anchor: Graph, vertices: u32) -> VertexBlock {
+pub(super) fn region(anchor: Graph, vertices: u32) -> VertexBlock {
     let fixed = fixed_graph(anchor, vertices);
     let key = canon::key(&fixed).min(canon::key(&fixed.complement()));
     VertexBlock {
