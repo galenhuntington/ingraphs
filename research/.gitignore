@@ -1,3 +1,4 @@
 *.csv
+!refutations-2026-10-14.csv
 *.txt
 nauty-probe

@@ -519,6 +519,100 @@ the latter reads explicit `anchor,vertex-mask` pairs, without a header, in order
 Imported coverage, the new n=16 results, measured next-run guidance, and the new
 refuter's structure are in [the October 5 note](research/2026-10-05.md).
 
+### Orbital-variable SAT (no fixed seed colours)
+
+`scripts/orbital_sat.py` searches entire structured families, rather than
+rewiring a block of a seed. Each cell of a partition of **all vertex pairs**
+gets one Boolean colour variable. Usually cells are pair-orbits of a group;
+selected exceptional vertices can have completely arbitrary neighbourhoods.
+No edge-count or degree constraints are imposed. The existing RustSAT/CaDiCaL
+2.2.1 backend and `--features native,sat` build suffice.
+
+Every decoded SAT model is checked for a copy of the candidate in either
+colour. Each discovered copy gives two clauses on the **set** of variables
+its edges touch, forbidding both monochromatic assignments. Repeated variables
+in a copy collapse to one literal. A reported refuter also passes the separate
+existence matcher. `family-unsat-unverified` excludes **only that partition
+family**, not all graphs, and is not a separately checked proof certificate.
+
+Start with the small `triples` portfolio (the default if no family selector is
+given). Use `--plan` first, then repeat without it to run:
+
+```sh
+python3 scripts/orbital_sat.py --order 14 --candidates output/batches/all14 \
+    --ledger output/orbital-sat.sqlite --preset triples \
+    --seconds 30 --jobs 5 --rng-seed 2026101401 --plan
+python3 scripts/orbital_sat.py --order 14 --candidates output/batches/all14 \
+    --ledger output/orbital-sat.sqlite --preset triples \
+    --seconds 30 --jobs 5 --rng-seed 2026101401 \
+    > output/orbital14-1.csv 2> output/orbital14-1.log
+```
+
+The October 14 experiments already have their own populated ledgers; see
+[the experiment note](research/2026-10-14.md) for commands continuing those
+without repeating completed exclusions.
+
+Family selectors:
+
+- `--template s3:4`: four aligned triples under a simultaneous S3 action;
+  all remaining vertices are fixed singletons. This has 25/31/38 variables
+  for n=14/15/16, respectively.
+- `--template c3:4`: keep simultaneous rotation, drop the reflections.
+- `--template s3:4/fixed`: split every pair touching a fixed singleton into
+  an independent variable. For n=14 this has 41 variables. The structured
+  12-vertex body remains, but the whole graph need not have any symmetry.
+- `--template s3:4/0+3`: release the neighbourhoods of explicit vertices 0
+  and 3 (zero-based labels). No edge colours are fixed anywhere.
+- `--template cycle:4+4+2+2+2`: simultaneous rotation on the given cycles;
+  cycle lengths must sum to n. `s4:3`, `c4:3`, and `d4:3` similarly describe
+  aligned four-vertex layers with symmetric, cyclic, or dihedral action.
+- `--preset triples`, `squares`, or `cyclic` can be repeated. The first two
+  include a few controlled-exception choices. `cyclic` includes every cycle
+  type, subject to the variable limits; it can make a much larger catalogue.
+  `--min-variables`/`--max-variables` filter the **resulting** partitions
+  after exceptions (default 0..64). Print the plan to see omissions/counts.
+- `--partition-file FILE` accepts custom partitions: one nonzero decimal
+  edge mask per line, disjoint, covering all pairs; blank/comment lines allowed.
+  Explicit templates/files without a preset select only those families.
+
+Bookkeeping and budgets:
+
+- **Use a separate ledger from `sat_repair.py`.** The identity is the host
+  order, decimal candidate, and complete sorted partition, not its display
+  name. Exact duplicates are merged; isomorphic or overlapping families are
+  not generally merged. Vertex-region CSVs cannot establish family exclusions.
+- `--work new` schedules never-completed tasks; `retry` schedules unresolved
+  ones; `all` schedules both. None retries family UNSAT or a refuted candidate.
+  Repeat the family selectors when resuming; they filter the eligible work.
+- Each task is one candidate/family pair, with a fresh solver and `--seconds`
+  wall-time budget including witness collection. `--jobs` changes concurrency,
+  not coverage. The plan reports the sum of task budgets and saves itself in
+  SQLite, so redirecting its terminal output is optional.
+- Retries start from scratch. Increase time and/or deliberately change
+  `--rng-seed`; identical candidate/family/seed inputs reproduce the stream
+  independently of scheduling. There is no implicit restart multiplication.
+- Completed rows are committed before CSV output. Ctrl-C/SIGTERM reaps workers;
+  an in-flight abort leaves the task eligible. A refutation skips that
+  candidate's queued tasks; already running tasks may finish. Other candidates
+  are not automatically cross-culled and candidate files are never modified.
+- Plans, exact partitions, per-attempt parameters, executable SHA-256, and
+  completed CSV rows are retained. `--status` reads the whole ledger without
+  taking the writer lock; `--export-csv` recovers all completed rows. Only one
+  writable launcher may use a ledger at once. Do not rebuild its binary during
+  a running campaign. Separate ledgers allow concurrent campaigns.
+  Status totals include historical tasks for refuted candidates; use `--plan`
+  for the currently eligible count (those candidates are always skipped).
+- `--dump-dir DIR` saves projected CNFs with the variable-to-edge mapping and
+  a full graph-copy witness for every learned constraint. This is an audit
+  artifact, not a saved solver or an UNSAT proof log. `last_copies` is blank
+  unless the last oracle traversal completed; it is not an optimization score.
+
+Native single-family plumbing is `graphy ingraph-orbital-sat N F --partition
+FILE`. Tests: `cargo test -r --features native,sat` and
+`python3 -m unittest discover -s scripts -p 'test_orbital_sat.py'` after rebuilding.
+They include all four-vertex candidates against exhaustive family search,
+independent projected-CNF checks, exception refinement, and interruption/resume.
+
 ## Some graphs
 
 Here are numeric representations of some graphs mentioned in the
@@ -546,7 +640,9 @@ article:
 
 ### 14 DUI candidates
 
-These are the 26 candidates for a 14-DUI, with their properties:
+This historical candidate table predates several refutations. The
+[October 14 search](research/2026-10-14.md) eliminated `482968729600`, reducing
+the then-current 25-candidate pool to 24 survivors.
 
 The two refutations found on 2026-09-17, generator commands, and further
 mathematical observations are recorded in [the research report](research/2026-09-17.md).

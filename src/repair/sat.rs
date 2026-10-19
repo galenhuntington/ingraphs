@@ -1,4 +1,4 @@
-//! Incremental SAT separation: every stored mask is a FULL labelled copy of F.
+//! Incremental SAT separation: block mode stores FULL labelled copies of F.
 //! Outside-block assignments are temporary assumptions, never permanent units.
 //! SAT is provisional until both colours pass the graph oracle. Local UNSAT
 //! rules out only the printed anchor/free-edge subcube, not the candidate.
@@ -13,6 +13,7 @@ use rustsat_cadical::{CaDiCaL, Limit};
 use std::path::{Path, PathBuf};
 
 mod blocks;
+pub mod orbital;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum BlockMode {
@@ -103,6 +104,9 @@ struct Config {
 }
 
 /// All binding-specific operations live here. No raw FFI or solver internals.
+/// Masks are sets of SAT variables: full edge-copy masks in block mode,
+/// projected variable sets in orbital mode. Never share an Engine between
+/// different variable interpretations.
 struct Engine {
     solver: CaDiCaL<'static, 'static>,
     variables: usize,

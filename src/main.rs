@@ -312,6 +312,9 @@ enum C {
     /// Incremental SAT block repair (requires the sat Cargo feature)
     #[cfg(feature = "sat")]
     IngraphSat(repair::sat::Args),
+    /// SAT over a partition of vertex pairs, with no fixed seed colours
+    #[cfg(feature = "sat")]
+    IngraphOrbitalSat(repair::sat::orbital::Args),
     /// Enumerate all graphs
     #[command(arg_required_else_help = true)]
     Enumerate {
@@ -537,6 +540,8 @@ pub fn main() {
         C::IngraphCount(args) => repair::count_hosts(args),
         #[cfg(feature = "sat")]
         C::IngraphSat(args) => repair::sat::run(args),
+        #[cfg(feature = "sat")]
+        C::IngraphOrbitalSat(args) => repair::sat::orbital::run(args),
         C::Enumerate { size } => {
             enumerate(size, None, &[]);
         }
