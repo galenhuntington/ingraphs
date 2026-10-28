@@ -99,6 +99,19 @@ use `awk '!x[$0]++'` after `labelg`. Both deduplicators have growing memory
 use, even though their output streams. They are not the exhaustive search's
 visited-state implementation, which always uses exact packed graph keys.
 
+### Resumable exhaustive orbital enumeration
+
+`scripts/orbital_enum.py` covers the entire `cycle:4+4+4+4` family in 2,400
+bounded batches, using 39,354,368 assignments before exact isomorphism and
+complement deduplication. A separate SQLite library retains completed batches
+and per-candidate checking progress. It needs nauty, not SAT. Only completion
+of both generation and checking gives a family exclusion; partial runs do not.
+
+See [the enumeration protocol and campaign commands](research/2026-10-27.md)
+for the coverage argument, resuming the saved pilot, binary fingerprinting,
+and reusing the library with additional candidates. Do not use a SAT ledger
+as the enumeration database.
+
 ### Candidate-directed counterexample repair
 
 `ingraph-repair` starts from host seeds (or random hosts), and permits both

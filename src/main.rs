@@ -8,6 +8,7 @@ pub mod progress;
 pub mod canon;
 pub mod successors;
 pub mod repair;
+pub mod orbital_enum;
 
 use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::BTreeSet;
@@ -305,6 +306,8 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: Option<BitNum>
 
 #[derive(Debug,Subcommand)]
 enum C {
+    /// Enumerate a bounded affine graph cube (worker for scripts/orbital_enum.py)
+    OrbitalEnum(orbital_enum::Args),
     /// Seeded counterexample repair by exact copy counts or learned constraints
     IngraphRepair(repair::Args),
     /// Exact monochromatic copy counts, without computing repair moves
@@ -536,6 +539,12 @@ fn parse_subgraph_args(strs: Vec<String>) -> Option<(Vec<BitNum>, Vec<BitNum>)> 
 pub fn main() {
     let args = Cli::parse();
     match args.command {
+        C::OrbitalEnum(args) => {
+            if let Err(error) = orbital_enum::run(args) {
+                eprintln!("orbital-enum: {error}");
+                std::process::exit(2);
+            }
+        }
         C::IngraphRepair(args) => repair::run(args),
         C::IngraphCount(args) => repair::count_hosts(args),
         #[cfg(feature = "sat")]
