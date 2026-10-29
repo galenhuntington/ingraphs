@@ -36,7 +36,7 @@ pub const ONE: BitNum = 1;
 pub const ONE: BitNum = BitNum::ONE;
 
 #[inline]
-pub fn one_bits(ct: usize) -> BitNum { (1 << ct) - ONE }
+pub fn one_bits(ct: usize) -> BitNum { (ONE << ct) - 1 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd)]
 pub struct BitVec (pub BitNum);
