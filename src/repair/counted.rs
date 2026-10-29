@@ -6,7 +6,7 @@
 //! interaction correction to the sum of the two single-edge deltas.
 
 use super::*;
-use crate::base::{index, rev_index};
+use crate::base::{index, rev_index, ZERO};
 
 #[derive(Debug, Default)]
 struct Score {
@@ -158,7 +158,7 @@ impl Counter {
                 witness_limit,
                 stop_at_witness_limit: false,
             };
-            if !search.go(0, 0, 0, 0) {
+            if !search.go(0, 0, ZERO, ZERO) {
                 return None;
             }
             score.colors[color] = score.copies - before;
@@ -222,7 +222,7 @@ impl Counter {
                 witness_limit,
                 stop_at_witness_limit: true,
             };
-            complete &= search.go(0, 0, 0, 0);
+            complete &= search.go(0, 0, ZERO, ZERO);
         }
         let copies = complete.then(|| {
             assert_eq!(score.copies % self.multiplicity, 0);
@@ -674,6 +674,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base::ONE;
 
     fn brute(pattern: Graph, host: Graph) -> u64 {
         let mut copies = HashSet::new();
@@ -744,7 +745,7 @@ mod tests {
 
     #[test]
     fn interruption_is_not_a_zero_score() {
-        let pattern = Graph::from_bits(5, 7);
+        let pattern = Graph::from_u64(5, 7);
         let counter = Counter::new(&pattern);
         assert!(
             counter
@@ -772,7 +773,7 @@ mod tests {
     fn weighted_walks_keep_exact_scores_and_repeatable_traces() {
         // K6 always has a monochromatic triangle, so this exercises penalties,
         // evictions and smoothing throughout, rather than stopping on a hit.
-        let pattern = Graph::from_bits(6, 7);
+        let pattern = Graph::from_u64(6, 7);
         let config = Config {
             penalty_every: 1,
             penalty_cap: 7,
@@ -783,7 +784,7 @@ mod tests {
             seconds: 0.0,
             ..Config::default()
         };
-        let start = Graph::from_bits(6, 0);
+        let start = Graph::from_bits(6, ZERO);
         let a = walk(&pattern, start, &config, &mut StdRng::seed_from_u64(205));
         let b = walk(&pattern, start, &config, &mut StdRng::seed_from_u64(205));
         assert_eq!(
@@ -823,14 +824,14 @@ mod tests {
 
     #[test]
     fn pairs_do_not_just_relabel_the_current_host() {
-        let pattern = Graph::from_bits(5, 7);
+        let pattern = Graph::from_u64(5, 7);
         let counter = Counter::new(&pattern);
         for h in [1, 3, 7, 45, 613, 771] {
-            let host = Graph::from_bits(5, h);
+            let host = Graph::from_u64(5, h as u64);
             let score = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
             let choices = pair_choices(&score, host, &[0; 10], 0, score.copies, 100);
             for (a, b) in choices {
-                let next = Graph::from_bits(5, h ^ (1 << a) ^ (1 << b));
+                let next = Graph::from_bits(5, h ^ (ONE << a) ^ (ONE << b));
                 assert_ne!(host_key(&host), host_key(&next));
             }
         }
@@ -842,14 +843,14 @@ mod tests {
             if f.count_ones() < 2 {
                 continue;
             }
-            let pattern = Graph::from_bits(4, f as BitNum);
+            let pattern = Graph::from_u64(4, f);
             let counter = Counter::new(&pattern);
             for h in 0..64 {
-                let host = Graph::from_bits(4, h);
+                let host = Graph::from_u64(4, h as u64);
                 let score = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
                 for b in 1..6 {
                     for a in 0..b {
-                        let next = Graph::from_bits(4, h ^ (1 << a) ^ (1 << b));
+                        let next = Graph::from_bits(4, h ^ (ONE << a) ^ (ONE << b));
                         assert_eq!(
                             score.copies as i64 + score.pair_delta(a, b),
                             brute(pattern, next) as i64
@@ -864,12 +865,12 @@ mod tests {
     #[test]
     fn frontier_minima_have_cheaper_genuine_pair_escapes() {
         for (f, h, q, focused, all, paired) in [
-            (208095050752, 149391117928587412994558940, 2, 10, 8, 3),
+            (208095050752u128, 149391117928587412994558940u128, 2, 10, 8, 3),
             (35391346720704, 1735057707038897413644043761, 5, 19, 14, 9),
             (35391346720704, 240446773475227354961364772, 5, 9, 9, 6),
         ] {
-            let pattern = Graph::from_bits(14, f);
-            let host = Graph::from_bits(14, h);
+            let pattern = Graph::from_bits(14, f.into());
+            let host = Graph::from_bits(14, h.into());
             let score = Counter::new(&pattern)
                 .evaluate::<2>(host, Instant::now(), None)
                 .unwrap();
@@ -893,7 +894,7 @@ mod tests {
 
     #[test]
     fn archives_are_exact_bounded_diverse_and_do_not_change_walks() {
-        let pattern = Graph::from_bits(5, 7);
+        let pattern = Graph::from_u64(5, 7);
         let counter = Counter::new(&pattern);
         let config = Config {
             archive: 4,
@@ -903,10 +904,10 @@ mod tests {
             pair_every: 1,
             ..Config::default()
         };
-        let start = Graph::from_bits(5, 0);
+        let start = Graph::from_u64(5, 0);
         let mut archive = Archive::new(&config, start);
         for h in 0..1024 {
-            let host = Graph::from_bits(5, h);
+            let host = Graph::from_u64(5, h);
             let q = counter.score(host, Instant::now(), None).unwrap().copies;
             archive.offer(host, q, 0, h as u64);
             assert!(archive.entries.len() <= 4);

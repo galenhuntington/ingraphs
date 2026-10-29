@@ -2,7 +2,7 @@
 //! least-decimal representation in `enumerate`. These keys are not persistent
 //! identifiers: backend/version/options may change their labeling.
 
-use crate::base::{BitNum, Bits, Graph, MAX_SIZE};
+use crate::base::{BitNum, Bits, Graph, MAX_SIZE, ZERO, ONE};
 use std::collections::BTreeSet;
 
 /// An exact packed canonical graph, NOT a hash. Only compare keys for the
@@ -55,10 +55,10 @@ fn canonical_bits(gr: &Graph) -> BitNum {
         status, 0,
         "nauty canonicalization failed with status {status}"
     );
-    let mut bits = 0;
+    let mut bits = ZERO;
     for v in 1..gr.size {
         for u in 0..v {
-            bits |= (((out[u] >> v) & 1) as BitNum) << crate::base::raw_index(u, v);
+            bits |= BitNum::from((out[u] >> v) & 1) << crate::base::raw_index(u, v);
         }
     }
     bits
@@ -77,7 +77,7 @@ fn canonical_bits(gr: &Graph) -> BitNum {
 pub fn bump(gr: &Graph, extend: bool) -> BTreeSet<Key> {
     let mut keys = BTreeSet::new();
     for b in 0..Graph::triangle(gr.size) {
-        let bit = (1 as BitNum) << b;
+        let bit = ONE << b;
         if (gr.bits() & bit == 0) == extend {
             keys.insert(key(&Graph::from_bits(gr.size, gr.bits() ^ bit)));
         }
@@ -92,7 +92,7 @@ pub fn bump_representatives(gr: &Graph, extend: bool) -> Vec<Graph> {
     let mut keys = BTreeSet::new();
     let mut representatives = Vec::new();
     for b in 0..Graph::triangle(gr.size) {
-        let bit = (1 as BitNum) << b;
+        let bit = ONE << b;
         if (gr.bits() & bit == 0) == extend {
             let next = Graph::from_bits(gr.size, gr.bits() ^ bit);
             if keys.insert(key(&next)) { representatives.push(next); }
@@ -113,7 +113,7 @@ mod tests {
         let mut forward = BTreeMap::new();
         let mut backward = BTreeMap::new();
         for bits in 0..(1 << 15) {
-            let g = Graph::from_bits(6, bits);
+            let g = Graph::from_u64(6, bits);
             let native = key(&g);
             let legacy = enumerate::to_best(&g).bits();
             if let Some(previous) = forward.insert(native, legacy) {
@@ -167,12 +167,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "unsupported graph order")]
     fn rejects_unsupported_order_before_ffi() {
-        key(&Graph::from_bits(MAX_SIZE + 1, 0));
+        key(&Graph::from_u64(MAX_SIZE + 1, 0));
     }
 
     #[test]
     #[should_panic(expected = "edges outside")]
     fn rejects_out_of_range_edges() {
-        key(&Graph::from_bits(3, 8));
+        key(&Graph::from_u64(3, 8));
     }
 }

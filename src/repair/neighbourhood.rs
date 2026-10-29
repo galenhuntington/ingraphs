@@ -73,7 +73,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
         checks: 0,
         oracle_time: Duration::ZERO,
     };
-    let result = search.go(start, 0, config.depth.min(Graph::triangle(start.size)));
+    let result = search.go(start, ZERO, config.depth.min(Graph::triangle(start.size)));
     let (status, host) = match result {
         Ok(Some(host)) => ("refuted", host),
         Ok(None) => ("neighbourhood-exhausted", start),
@@ -123,7 +123,8 @@ mod tests {
                     !copy.is_subgraph_of(&host) && !copy.is_subgraph_of(&host.complement())
                 })
             };
-            let possible = (0..64).any(|h: BitNum| {
+            let possible = (0..64).any(|h: u8| {
+                let h = BitNum::from(h);
                 (h ^ start.bits()).count_ones() <= 2 && refutes(Graph::from_bits(4, h))
             });
             let result = walk(&pattern, start, &config, &mut rng);

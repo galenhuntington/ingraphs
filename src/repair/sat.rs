@@ -3,6 +3,7 @@
 //! SAT is provisional until both colours pass the graph oracle. Local UNSAT
 //! rules out only the printed anchor/free-edge subcube, not the candidate.
 
+use crate::base::ONE;
 use super::*;
 use counted::Counter;
 use rustsat::solvers::{
@@ -195,7 +196,7 @@ impl Engine {
         self.solver.detach_terminator();
         match result {
             SolverResult::Sat => {
-                let mut model = 0;
+                let mut model = ZERO;
                 for e in 0..self.variables {
                     let value = match self.solver.lit_val(literal(e, true)).unwrap() {
                         TernaryVal::True => true,
@@ -203,7 +204,7 @@ impl Engine {
                         TernaryVal::DontCare => host & (1 << e) != 0,
                     };
                     if value {
-                        model |= 1 << e;
+                        model |= ONE << e;
                     }
                 }
                 assert_eq!((model ^ host) & !free, 0, "SAT model violates a fixed edge");
@@ -215,7 +216,7 @@ impl Engine {
                     .core()
                     .unwrap()
                     .iter()
-                    .fold(0, |acc, lit| acc | (1 << lit.var().idx()));
+                    .fold(ZERO, |acc, lit| acc | (ONE << lit.var().idx()));
                 assert_eq!(core & free, 0);
                 Answer::Unsat(core)
             }
@@ -284,7 +285,7 @@ fn choose_block(
     }
     let mut edges: Vec<_> = (0..variables).collect();
     edges.shuffle(rng);
-    let mut free: BitNum = 0;
+    let mut free: BitNum = ZERO;
     if matches!(mode, BlockMode::Directed) {
         let target = size.div_ceil(2);
         while (free.count_ones() as usize) < target {
@@ -306,13 +307,13 @@ fn choose_block(
             }
             free |= 1 << e;
         }
-        let support = copies.iter().fold(0, |a, &m| a | m);
+        let support = copies.iter().fold(ZERO, |a, &m| a | m);
         for &e in &edges {
             if free.count_ones() as usize == target {
                 break;
             }
-            if support & (1 << e) != 0 {
-                free |= 1 << e;
+            if support & (ONE << e) != 0 {
+                free |= ONE << e;
             }
         }
     }
@@ -385,7 +386,7 @@ fn block(
     let mut out = Outcome {
         status: "round-limit",
         free,
-        core: 0,
+        core: ZERO,
         host: anchor,
         last: anchor,
         best_copies: initial_copies,
@@ -792,13 +793,13 @@ mod tests {
     fn pinned_backend_models_assumptions_and_recovery() {
         let mut engine = Engine::new(3, 9, false);
         assert_eq!(engine.solver.signature(), "cadical-2.2.1");
-        assert!(engine.add_copy(3));
-        assert!(!engine.add_copy(3));
+        assert!(engine.add_copy(3u8.into()));
+        assert!(!engine.add_copy(3u8.into()));
         assert!(matches!(
-            engine.solve(0, 0, Instant::now(), None, 0),
+            engine.solve(ZERO, ZERO, Instant::now(), None, 0),
             Answer::Unsat(_)
         ));
-        let Answer::Model(model) = engine.solve(0, 2, Instant::now(), None, 0) else {
+        let Answer::Model(model) = engine.solve(ZERO, 2u8.into(), Instant::now(), None, 0) else {
             panic!()
         };
         assert_eq!(model & 3, 2);
@@ -810,8 +811,8 @@ mod tests {
             engine.solver.lit_val(Lit::negative(1)).unwrap(),
             TernaryVal::False
         );
-        engine.add_copy(6);
-        let Answer::Model(model) = engine.solve(0, 7, Instant::now(), None, 0) else {
+        engine.add_copy(6u8.into());
+        let Answer::Model(model) = engine.solve(ZERO, 7u8.into(), Instant::now(), None, 0) else {
             panic!()
         };
         assert_ne!(model & 3, 0);
@@ -865,10 +866,10 @@ mod tests {
             let mut engine = Engine::new(6, 7, true);
             for _ in 0..8 {
                 let anchor = random_graph(&mut rng, 4);
-                let free = rng.gen_range(0..64);
+                let free = BitNum::from(rng.gen_range(0..64u8));
                 let possible = (0..64).any(|h| {
-                    (h ^ anchor.bits()) & !free == 0
-                        && naive_refutes(&pattern, Graph::from_bits(4, h))
+                    (h as u128 ^ anchor.bits()) & !free == 0
+                        && naive_refutes(&pattern, Graph::from_u64(4, h))
                 });
                 let out = block(
                     &mut engine,
@@ -894,30 +895,31 @@ mod tests {
 
     #[test]
     fn triangle_ramsey_control_and_limits() {
-        let pattern = Graph::from_bits(5, 7);
+        let pattern = Graph::from_u64(5, 7);
         let counter = Counter::new(&pattern);
         let mut engine = Engine::new(10, 10, false);
-        let anchor = Graph::from_bits(5, 0);
+        let anchor = Graph::from_u64(5, 0);
         let out = block(
             &mut engine,
             &counter,
             &pattern,
             anchor,
             &unlimited(),
-            |_| 1023,
+            |_| 1023u16.into(),
         );
         assert_eq!(out.status, "refuted"); // a red/blue C5
-        let pattern = Graph::from_bits(6, 7);
+        let pattern = Graph::from_u64(6, 7);
         let counter = Counter::new(&pattern);
         let mut engine = Engine::new(15, 10, false);
-        let anchor = Graph::from_bits(6, 0);
+        let anchor = Graph::from_u64(6, 0);
+        let test_val = BitNum::from(32767u16);
         let out = block(
             &mut engine,
             &counter,
             &pattern,
             anchor,
             &unlimited(),
-            |_| 32767,
+            |_| test_val,
         );
         assert_eq!(out.status, "unrestricted-unsat-unverified"); // R(3,3)=6
         let mut engine = Engine::new(15, 10, false);
@@ -925,24 +927,24 @@ mod tests {
             rounds: 0,
             ..unlimited()
         };
-        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| 32767);
+        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| test_val);
         assert_eq!(out.status, "round-limit");
         let config = Config {
             seconds: f64::MIN_POSITIVE,
             ..unlimited()
         };
-        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| 32767);
+        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| test_val);
         assert_eq!(out.status, "time-limit");
         assert_ne!(out.best_copies, Some(0));
     }
 
     #[test]
     fn block_selection_has_requested_size_and_both_colors() {
-        let host = Graph::from_bits(6, 7);
+        let host = Graph::from_u64(6, 7);
         let mut rng = StdRng::seed_from_u64(47);
         for size in 2..=15 {
             for _ in 0..30 {
-                let free = choose_block(host, &[7], size, BlockMode::Directed, &mut rng);
+                let free = choose_block(host, &[7u8.into()], size, BlockMode::Directed, &mut rng);
                 assert_eq!(free.count_ones() as usize, size);
                 assert_ne!(free & host.bits(), 0);
                 assert_ne!(free & host.complement().bits(), 0);

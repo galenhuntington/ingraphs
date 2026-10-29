@@ -3,6 +3,7 @@
 //! witnesses are projected by SET UNION (not parity) to NAE constraints.
 //! Family UNSAT is not universality, nor a separately checked UNSAT proof.
 
+use crate::base::{ONE, one_bits};
 use super::*;
 
 #[derive(Debug, clap::Args)]
@@ -43,9 +44,9 @@ struct Partition {
 impl Partition {
     fn new(size: usize, mut cells: Vec<BitNum>) -> Self {
         let edges = Graph::triangle(size);
-        let full = ((1 as BitNum) << edges) - 1;
+        let full = one_bits(edges);
         cells.sort_unstable(); // Cell order is not part of the family identity.
-        let mut covered = 0;
+        let mut covered = ZERO;
         let mut edge_variable = vec![0; edges];
         for (variable, &cell) in cells.iter().enumerate() {
             assert!(cell != 0 && cell & !full == 0, "invalid partition cell");
@@ -63,12 +64,12 @@ impl Partition {
     }
 
     fn project(&self, copy: BitNum) -> BitNum {
-        bits(copy).fold(0, |mask, e| mask | (1 << self.edge_variable[e]))
+        bits(copy).fold(ZERO, |mask, e| mask | (ONE << self.edge_variable[e]))
     }
 
     fn decode(&self, assignment: BitNum) -> BitNum {
         assert_eq!(assignment >> self.cells.len(), 0);
-        bits(assignment).fold(0, |host, v| host | self.cells[v])
+        bits(assignment).fold(ZERO, |host, v| host | self.cells[v])
     }
 
     fn text(&self) -> String {
@@ -107,9 +108,9 @@ fn search(
     let mut engine = Engine::new(partition.cells.len(), seed, factor);
     let mut rng = StdRng::seed_from_u64(seed);
     let phases =
-        (0..partition.cells.len()).fold(0, |m, i| if rng.gen_bool(0.5) { m | (1 << i) } else { m });
+        (0..partition.cells.len()).fold(ZERO, |m, i| if rng.gen_bool(0.5) { m | (ONE << i) } else { m });
     engine.phases(phases);
-    let free = ((1 as BitNum) << partition.cells.len()) - 1;
+    let free = one_bits(partition.cells.len());
     let mut full_witnesses = Vec::new(); // One auditable graph witness per projected constraint.
     let mut out = Outcome {
         status: "round-limit",
@@ -308,13 +309,20 @@ pub fn run(args: Args) {
 mod tests {
     use super::*;
 
+    #[cfg(not(feature = "u256"))]
+    fn v(a: Vec<BitNum>) -> Vec<BitNum> { a }
+    #[cfg(feature = "u256")]
+    fn v(a: Vec<u64>) -> Vec<BitNum> { a.into_iter().map(|x| BitNum::from(x)).collect() }
+
     #[test]
     fn projection_is_union_and_preserves_monochromaticity() {
-        let p = Partition::new(4, vec![56, 1, 6]);
-        assert_eq!(p.project(6), 2); // Two edges, ONE variable; not XOR.
-        for assignment in 0..8 {
+        let p = Partition::new(4, v(vec![56, 1, 6]));
+        assert_eq!(p.project(6u8.into()), 2); // Two edges, ONE variable; not XOR.
+        for assignment in 0..8u8 {
+            let assignment = BitNum::from(assignment);
             let host = p.decode(assignment);
-            for copy in 0..64 {
+            for copy in 0..64u8 {
+                let copy = BitNum::from(copy);
                 let projected = p.project(copy);
                 assert_eq!(copy & host == 0, projected & assignment == 0);
                 assert_eq!(copy & !host == 0, projected & !assignment == 0);
@@ -331,12 +339,12 @@ mod tests {
             max_constraints: 10000,
             conflicts: 0,
         };
-        for cells in [vec![63], vec![1, 6, 56], vec![1, 2, 4, 8, 16, 32]] {
+        for cells in [vec![63], vec![1, 6, 56], vec![1, 2, 4, 8, 16, 32]].map(|a| v(a)) {
             let p = Partition::new(4, cells);
             for f in 0..64 {
-                let pattern = Graph::from_bits(4, f);
-                let possible = (0..1 << p.cells.len()).any(|m| {
-                    super::super::tests::naive_refutes(&pattern, Graph::from_bits(4, p.decode(m)))
+                let pattern = Graph::from_u64(4, f);
+                let possible = (0..1u128 << p.cells.len()).any(|m| {
+                    super::super::tests::naive_refutes(&pattern, Graph::from_bits(4, p.decode(m.into())))
                 });
                 let (out, engine, witnesses) = search(&pattern, &p, &config, 17, false);
                 assert_eq!(out.status == "refuted", possible, "F={f}, partition={p:?}");
@@ -356,8 +364,8 @@ mod tests {
 
     #[test]
     fn limits_are_not_unsat() {
-        let p = Partition::new(4, vec![1, 2, 4, 8, 16, 32]);
-        let pattern = Graph::from_bits(4, 3);
+        let p = Partition::new(4, v(vec![1, 2, 4, 8, 16, 32]));
+        let pattern = Graph::from_u64(4, 3);
         let config = Config {
             seconds: 0.0,
             rounds: 0,
@@ -392,12 +400,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "overlapping")]
     fn reject_overlap() {
-        Partition::new(3, vec![3, 6]);
+        Partition::new(3, v(vec![3, 6]));
     }
 
     #[test]
     #[should_panic(expected = "ALL")]
     fn reject_missing_pairs() {
-        Partition::new(3, vec![1, 2]);
+        Partition::new(3, v(vec![1, 2]));
     }
 }

@@ -1,6 +1,6 @@
 //! One-edge extensions all of whose one-edge retractions are in the pool.
 use crate::{
-    base::{BitNum, Bits, Graph, MAX_SIZE},
+    base::{BitNum, Bits, Graph, MAX_SIZE, ONE},
     canon,
 };
 use std::collections::BTreeSet;
@@ -23,7 +23,7 @@ pub fn generate(size: usize, pool: impl Iterator<Item = BitNum>) -> impl Iterato
         while remaining != 0 {
             let b = remaining.trailing_zeros();
             remaining &= remaining - 1;
-            let retraction = Graph::from_bits(size, gr.bits() ^ ((1 as BitNum) << b));
+            let retraction = Graph::from_bits(size, gr.bits() ^ (ONE << b));
             if !pool.contains(&canon::key(&retraction)) {
                 return None;
             }
@@ -84,8 +84,9 @@ mod tests {
 
     #[test]
     fn empty_input_and_duplicate_inputs() {
+        let f = |x: u8| BitNum::from(x);
         assert_eq!(generate(0, std::iter::empty()).count(), 0);
-        assert_eq!(generate(1, [0, 0].into_iter()).count(), 0);
-        assert_eq!(generate(3, [1, 1, 2, 4].into_iter()).count(), 1);
+        assert_eq!(generate(1, [0, 0].map(f).into_iter()).count(), 0);
+        assert_eq!(generate(3, [1, 1, 2, 4].map(f).into_iter()).count(), 1);
     }
 }

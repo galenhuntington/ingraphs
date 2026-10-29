@@ -2,7 +2,7 @@
 //! The input is a base graph followed by disjoint nonzero XOR masks. Enumerate
 //! EVERY assignment, returning exact isomorphism/complement representatives.
 
-use crate::base::{BitNum, Bits, Graph, MAX_SIZE};
+use crate::base::{BitNum, Bits, Graph, MAX_SIZE, one_bits, ZERO};
 use crate::canon;
 use std::collections::HashSet;
 use std::io::Write;
@@ -25,11 +25,11 @@ fn validate(size: usize, base: BitNum, masks: &[BitNum]) -> Result<(), String> {
     if masks.len() > 20 {
         return Err("a worker cube may have at most 20 variables; split it first".into());
     }
-    let full = ((1 as BitNum) << Graph::triangle(size)) - 1;
+    let full = one_bits(Graph::triangle(size));
     if base & !full != 0 {
         return Err("base graph has out-of-range edges".into());
     }
-    let mut covered = 0;
+    let mut covered = ZERO;
     for &mask in masks {
         if mask == 0 || mask & !full != 0 || mask & covered != 0 {
             return Err("XOR masks must be nonzero, disjoint, and fit the order".into());
@@ -103,13 +103,17 @@ pub fn run(args: Args) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base::ONE;
+
+    fn bn(a: u32) -> BitNum { BitNum::from(a) }
 
     #[test]
     fn all_four_vertex_graphs_and_complement_normalization() {
-        let masks: Vec<_> = (0..6).map(|e| 1 << e).collect();
-        let hosts = enumerate(4, 0, &masks).unwrap();
+        let masks: Vec<_> = (0..6).map(|e| ONE << e).collect();
+        let hosts = enumerate(4, ZERO, &masks).unwrap();
         assert_eq!(hosts.len(), 6);
-        for h in 0..64 {
+        for h in 0..64u32 {
+            let h = bn(h);
             assert_eq!(representative(4, h), representative(4, h ^ 63));
             assert!(hosts.contains(&representative(4, h)));
         }
@@ -117,29 +121,29 @@ mod tests {
 
     #[test]
     fn affine_base_and_empty_cube() {
-        let hosts = enumerate(4, 21, &[3, 12, 48]).unwrap();
+        let hosts = enumerate(4, bn(21), &[bn(3), bn(12), bn(48)]).unwrap();
         let expected: HashSet<_> = (0..8)
             .map(|a| {
                 representative(
                     4,
-                    21 ^ (if a & 1 != 0 { 3 } else { 0 })
+                    bn(21u32) ^ (if a & 1 != 0 { 3 } else { 0 })
                         ^ (if a & 2 != 0 { 12 } else { 0 })
                         ^ (if a & 4 != 0 { 48 } else { 0 }),
                 )
             })
             .collect();
         assert_eq!(hosts.into_iter().collect::<HashSet<_>>(), expected);
-        assert_eq!(enumerate(4, 21, &[]).unwrap(), vec![representative(4, 21)]);
+        assert_eq!(enumerate(4, bn(21), &[]).unwrap(), vec![representative(4, bn(21))]);
     }
 
     #[test]
     fn rejects_bad_cubes() {
-        for masks in [vec![0], vec![3, 2], vec![64]] {
-            assert!(enumerate(4, 0, &masks).is_err());
+        for masks in [vec![ZERO], vec![bn(3), bn(2)], vec![bn(64)]] {
+            assert!(enumerate(4, ZERO, &masks).is_err());
         }
-        assert!(enumerate(4, 64, &[]).is_err());
-        assert!(enumerate(0, 0, &[]).is_err());
-        assert!(enumerate(MAX_SIZE + 1, 0, &[]).is_err());
-        assert!(validate(4, 0, &[1; 21]).is_err());
+        assert!(enumerate(4, bn(64), &[]).is_err());
+        assert!(enumerate(0, ZERO, &[]).is_err());
+        assert!(enumerate(MAX_SIZE + 1, ZERO, &[]).is_err());
+        assert!(validate(4, ZERO, &[ONE; 21]).is_err());
     }
 }

@@ -148,7 +148,7 @@ mod tests {
     fn fixed_seed_is_repeatable_with_one_worker() {
         let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
         pool.install(|| {
-            let gr = Graph::from_bits(7, 1118);
+            let gr = Graph::from_u64(7, 1118);
             assert_eq!(seek_seeded(&gr, 1000, 789), seek_seeded(&gr, 1000, 789));
         });
     }
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn zero_budget_and_global_bailout() {
         // 94 is universal for n=6, so no worker can find a counterexample.
-        let gr = Graph::from_bits(6, 94);
+        let gr = Graph::from_u64(6, 94);
         assert_eq!(seek_seeded(&gr, 0, 123), (None, 1));
         let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
         let (found, visited) = pool.install(|| seek_seeded(&gr, 1, 123));
@@ -164,6 +164,6 @@ mod tests {
         // Workers already between the cancellation check and insertion can
         // overshoot the soft cap by at most one entry per other worker.
         assert!((1..=4).contains(&visited));
-        assert_eq!(seek_seeded(&Graph::from_bits(0, 0), usize::MAX, 123), (None, 0));
+        assert_eq!(seek_seeded(&Graph::from_u64(0, 0), usize::MAX, 123), (None, 0));
     }
 }

@@ -107,16 +107,18 @@ impl Penalties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base::ZERO;
 
     #[test]
     fn weighted_deltas_match_recounting_including_two_edge_constraints() {
         let mut memory = Penalties::new(100);
-        for mask in 0..64 as BitNum {
+        for mask in 0..64u32 {
             if mask.count_ones() >= 2 {
-                memory.boost([mask], (mask % 5 + 1) as u32, 0);
+                memory.boost([mask.into()], (mask % 5 + 1) as u32, 0);
             }
         }
-        for host in 0..64 {
+        for host in 0..64u32 {
+            let host = BitNum::from(host);
             let old = memory.cost(host);
             for (e, delta) in memory.deltas(host, 6).into_iter().enumerate() {
                 assert_eq!(delta, memory.cost(host ^ (1 << e)) - old);
@@ -128,8 +130,12 @@ mod tests {
     fn bounded_eviction_decay_and_determinism() {
         let mut a = Penalties::new(3);
         let mut b = Penalties::new(3);
+        let bn3 = BitNum::from(3u8);
+        let bn5 = BitNum::from(5u8);
+        let bn9 = BitNum::from(9u8);
         for i in 0..500 {
-            let mask = [3, 5, 6, 7, 9][i % 5];
+            let mask = [3u8, 5, 6, 7, 9][i % 5];
+            let mask = BitNum::from(mask);
             a.boost([mask], 1, 7);
             b.boost([mask], 1, 7);
             assert!(a.len() <= 3);
@@ -137,23 +143,23 @@ mod tests {
             for (j, entry) in a.entries.iter().enumerate() {
                 assert_eq!(a.indices[&entry.mask], j);
             }
-            assert_eq!(a.deltas(9, 4), b.deltas(9, 4));
+            assert_eq!(a.deltas(bn9, 4), b.deltas(bn9, 4));
         }
         let mut memory = Penalties::new(3);
-        memory.boost([3], 1, 2);
-        memory.boost([5], 1, 2);
+        memory.boost([bn3], 1, 2);
+        memory.boost([bn5], 1, 2);
         assert_eq!(memory.len(), 1); // the weight-one old entry was smoothed away
-        memory.boost([5], MAX_WEIGHT, 0);
-        memory.boost([5], MAX_WEIGHT, 0);
-        assert_eq!(memory.cost(0), MAX_WEIGHT as i64);
+        memory.boost([bn5], MAX_WEIGHT, 0);
+        memory.boost([bn5], MAX_WEIGHT, 0);
+        assert_eq!(memory.cost(ZERO), MAX_WEIGHT as i64);
         let mut ring = Penalties::new(3);
-        for mask in [3, 5, 6, 9] {
+        for mask in [bn3, bn5, BitNum::from(6u8), bn9] {
             ring.boost([mask], 4, 5);
         }
         // At update 5, 5 is the oldest surviving constraint even though its
         // vector index was 1 before smoothing; it must be evicted next.
-        ring.boost([10], 4, 5);
-        assert!(!ring.indices.contains_key(&5));
-        assert!(ring.indices.contains_key(&9));
+        ring.boost([BitNum::from(10u8)], 4, 5);
+        assert!(!ring.indices.contains_key(&bn5));
+        assert!(ring.indices.contains_key(&bn9));
     }
 }

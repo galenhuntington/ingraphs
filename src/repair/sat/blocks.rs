@@ -122,7 +122,7 @@ mod tests {
                 );
                 for v in 1..n {
                     for u in 0..v {
-                        assert_eq!(mask & (1 << crate::base::index(u, v)) != 0, u < k || v < k);
+                        assert_eq!(mask & (ONE << crate::base::index(u, v)) != 0, u < k || v < k);
                     }
                 }
             }
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn fixed_core_dedup_is_exact_up_to_complement() {
-        let host = Graph::from_bits(5, 613); // C5
+        let host = Graph::from_u64(5, 613); // C5
         let mut rng = StdRng::seed_from_u64(743);
         let relabelled = host.renumber(&Perm::random(&mut rng, 5));
         let (blocks, labelled) = vertex_blocks(&[host, relabelled, host.complement()], 2, &mut rng);
@@ -152,17 +152,17 @@ mod tests {
         // All four-vertex anchors, all two-vertex rewiring regions. Compare
         // full enumeration with their fixed-core representatives independently
         // for every four-vertex candidate, not just the selector's own masks.
-        let seeds: Vec<_> = (0..64).map(|h| Graph::from_bits(4, h)).collect();
+        let seeds: Vec<_> = (0..64).map(|h| Graph::from_u64(4, h)).collect();
         let mut rng = StdRng::seed_from_u64(23);
         let (blocks, labelled) = vertex_blocks(&seeds, 2, &mut rng);
         assert_eq!(labelled, 384);
         assert_eq!(blocks.len(), 1); // K2 and its complement have equivalent extensions.
         let b = blocks[0];
         for f in 0..64 {
-            let pattern = Graph::from_bits(4, f);
-            let valid = |h| super::super::tests::naive_refutes(&pattern, Graph::from_bits(4, h));
+            let pattern = Graph::from_u64(4, f);
+            let valid = |h| super::super::tests::naive_refutes(&pattern, Graph::from_u64(4, h));
             let global = (0..64).any(valid);
-            let representative = (0..64).any(|h| (h ^ b.anchor.bits()) & !b.free == 0 && valid(h));
+            let representative = (0..64).any(|h| (h as u128 ^ b.anchor.bits()) & !b.free == 0 && valid(h));
             assert_eq!(global, representative);
         }
     }
@@ -170,8 +170,8 @@ mod tests {
     #[test]
     fn expansion_hits_core_preserves_anchor_and_never_repeats_a_class() {
         let mut rng = StdRng::seed_from_u64(89);
-        let original = region(Graph::from_bits(6, 1734), 1);
-        let core = (1 << crate::base::index(2, 3)) | (1 << crate::base::index(2, 4));
+        let original = region(Graph::from_u64(6, 1734), 1);
+        let core = (ONE << crate::base::index(2, 3)) | (ONE << crate::base::index(2, 4));
         let mut seen = HashSet::new();
         let next = expand(original, core, 3, &seen, &mut rng).unwrap();
         // Vertex 2 is the only one hitting both failed assumptions.
@@ -183,7 +183,7 @@ mod tests {
         while let Some(next) = expand(original, core, 3, &seen, &mut rng) {
             assert!(seen.insert(next.class()));
         }
-        assert!(expand(original, 0, 3, &HashSet::new(), &mut rng).is_none());
+        assert!(expand(original, ZERO, 3, &HashSet::new(), &mut rng).is_none());
         assert!(expand(original, core, 1, &HashSet::new(), &mut rng).is_none());
     }
 
@@ -195,16 +195,16 @@ mod tests {
             let (representatives, _) = vertex_blocks(&seeds, k, &mut rng);
             assert!(representatives.len() > 1);
             for f in [3, 7, 13, 19, 31, 59, 613] {
-                let pattern = Graph::from_bits(5, f);
+                let pattern = Graph::from_u64(5, f);
                 let refuters: Vec<_> = (0..1024)
                     .filter(|&h| {
-                        super::super::tests::naive_refutes(&pattern, Graph::from_bits(5, h))
+                        super::super::tests::naive_refutes(&pattern, Graph::from_u64(5, h))
                     })
                     .collect();
                 let feasible = |b: VertexBlock| {
                     refuters
                         .iter()
-                        .any(|h| (h ^ b.anchor.bits()) & !b.free == 0)
+                        .any(|h| (*h as u128 ^ b.anchor.bits()) & !b.free == 0)
                 };
                 for &host in &seeds {
                     for selected in (0..32u32).filter(|s| s.count_ones() as usize == k) {

@@ -6,7 +6,7 @@
 //! Hosts are NEVER canonicalized during a walk: constraints fix edge labels.
 //! A satisfied learned bank is only permission to call the full oracle again.
 
-use crate::base::{BitNum, Bits, Graph, MAX_SIZE, random_graph};
+use crate::base::{BitNum, Bits, Graph, MAX_SIZE, random_graph, ZERO};
 use crate::perm::Perm;
 use crate::tools::{build_sorted_row, find_subgraph_ss, read_graphs};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -297,7 +297,7 @@ impl Bank {
 
     // At most two variables can break a mixed NAE constraint (two when arity=2).
     fn critical(&self, mask: BitNum, red: u32) -> BitNum {
-        let mut critical = 0;
+        let mut critical = ZERO;
         if red == 1 {
             critical |= mask & self.host;
         }
@@ -528,7 +528,10 @@ pub fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) ->
 
 // Stable independent streams, insensitive to scheduling and candidate ordering.
 fn stream_seed(seed: u64, candidate: BitNum, restart: usize) -> u64 {
+    #[cfg(not(feature = "u256"))]
     let wide = candidate as u128;
+    #[cfg(feature = "u256")]
+    let wide = (candidate ^ (candidate >> 128u32)).as_u128();
     let mut x = seed ^ wide as u64 ^ (wide >> 64) as u64;
     x = x.wrapping_add((restart as u64).wrapping_mul(0x9e3779b97f4a7c15));
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -725,11 +728,12 @@ pub fn run(args: Args) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base::ONE;
 
     #[test]
     fn every_method_has_repeatable_step_limited_traces() {
-        let pattern = Graph::from_bits(6, 7);
-        let start = Graph::from_bits(6, 0);
+        let pattern = Graph::from_u64(6, 7);
+        let start = Graph::from_u64(6, 0);
         for method in [Method::Learned, Method::Counted, Method::Neighbourhood] {
             let config = Config {
                 method,
@@ -806,7 +810,7 @@ mod tests {
             let mut edges: Vec<_> = (0..10).collect();
             for _ in 0..400 {
                 edges.shuffle(&mut rng);
-                let mask = edges[..arity].iter().fold(0, |acc, &v| acc | (1 << v));
+                let mask = edges[..arity].iter().fold(ZERO, |acc, &v| acc | (ONE << v));
                 bank.add(mask);
                 assert!(!bank.add(mask));
                 bank.flip(rng.gen_range(0..10));
@@ -849,7 +853,7 @@ mod tests {
     #[test]
     fn known_cycle_refuter_and_limits() {
         // R(3,3)=6: a C5 and its complement are triangle-free.
-        let pattern = Graph::from_bits(5, 7);
+        let pattern = Graph::from_u64(5, 7);
         let cycle = Graph::from_fn(5, |a, b| b == a + 1 || (a == 0 && b == 4));
         let mut config = Config {
             method: Method::Learned,
@@ -865,17 +869,17 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(4);
         assert_eq!(walk(&pattern, cycle, &config, &mut rng).status, "refuted");
         assert_eq!(
-            walk(&pattern, Graph::from_bits(5, 0), &config, &mut rng).status,
+            walk(&pattern, Graph::from_u64(5, 0), &config, &mut rng).status,
             "step-limit"
         );
         config.steps = 10_000;
         assert_eq!(
-            walk(&pattern, Graph::from_bits(5, 0), &config, &mut rng).status,
+            walk(&pattern, Graph::from_u64(5, 0), &config, &mut rng).status,
             "refuted"
         );
         config.max_constraints = 1;
         assert_eq!(
-            walk(&pattern, Graph::from_bits(5, 0), &config, &mut rng).status,
+            walk(&pattern, Graph::from_u64(5, 0), &config, &mut rng).status,
             "constraint-limit"
         );
         config.seconds = 1e-12;

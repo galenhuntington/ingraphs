@@ -4,7 +4,7 @@
     This is extracted from a larger module in another project.
 */
 
-use crate::base::{BitNum,Graph,Bits,rev_hi_index,MAX_SIZE};
+use crate::base::{BitNum,Graph,Bits,rev_hi_index,MAX_SIZE,ZERO};
 use crate::perm::{Perm,all_perms};
 use crate::enumerate;
 use std::cmp::Reverse;
@@ -16,9 +16,6 @@ use std::collections::{BTreeMap,BTreeSet};
 pub fn factorial(n: usize) -> u128 {
     (1 ..= n as u128).product()
 }
-
-#[inline]
-pub fn one_bits(ct: usize) -> BitNum { (1 << ct) - 1 }
 
 pub fn timestamp() -> String {
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
@@ -58,9 +55,9 @@ pub fn parse_graph6(line: &str) -> BitNum {
     assert!(n <= MAX_SIZE, "graph6 too large (or multi-byte size): {}", line);
     let tri = Graph::triangle(n);
     assert_eq!(bytes.len(), 1 + tri.div_ceil(6), "Bad graph6 line: {}", line);
-    let mut edges: BitNum = 0;
+    let mut edges: BitNum = ZERO;
     for k in 0..tri {
-        let c = (bytes[1 + k / 6] - 63) as BitNum;
+        let c = BitNum::from(bytes[1 + k / 6] - 63);
         edges |= ((c >> (5 - k % 6)) & 1) << k;
     }
     edges
@@ -94,7 +91,7 @@ pub fn count_symmetries_slow(gr: &Graph) -> usize {
 }
 
 pub fn naive_find_best(gr: &Graph) -> Graph {
-    let mut best: BitNum = !0;
+    let mut best: BitNum = !ZERO;
     for perm in all_perms(gr.size) {
         let g = gr.unrenumber(&perm);
         best = best.min(g.bits());
