@@ -42,11 +42,11 @@ fn smoosh(row: BitNum, breaks: BitNum) -> BitNum {
                 break;
             }
         }
-        let mask = (1 << find) - 1;
-        let cnt = (row & !mask).count_ones();
+        let mask = one_bits(find);
+        let cnt = (row & !mask).count_ones() as usize;
         // eprintln!("start={} find={} mask={}", start, find, mask);
         row &= mask;
-        result |= one_bits(1 << cnt) << find;
+        result |= one_bits(cnt) << find;
     }
 }
 
