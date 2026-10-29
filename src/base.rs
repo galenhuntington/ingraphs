@@ -9,13 +9,34 @@ type Pair = (usize, usize);
 
 #[cfg(feature = "u64")]
 pub const MAX_SIZE: usize = 11;
-#[cfg(not(feature = "u64"))]
+#[cfg(not(any(feature = "u64", feature = "u256")))]
 pub const MAX_SIZE: usize = 16;
+#[cfg(feature = "u256")]
+pub const MAX_SIZE: usize = 23;
+
+// XXX BitNum was meant to provide access to the raw number.
+// But not necessarily a real number anymore, so perhaps drop,
+// or at least don't export, or at least avoid using?
 
 #[cfg(feature = "u64")]
 pub type BitNum = u64;
-#[cfg(not(feature = "u64"))]
+#[cfg(not(any(feature = "u64", feature = "u256")))]
 pub type BitNum = u128;
+#[cfg(feature = "u256")]
+pub type BitNum = ethnum::U256;
+
+#[cfg(not(feature = "u256"))]
+pub const ZERO: BitNum = 0;
+#[cfg(feature = "u256")]
+pub const ZERO: BitNum = BitNum::ZERO;
+
+#[cfg(not(feature = "u256"))]
+pub const ONE: BitNum = 1;
+#[cfg(feature = "u256")]
+pub const ONE: BitNum = BitNum::ONE;
+
+#[inline]
+pub fn one_bits(ct: usize) -> BitNum { (1 << ct) - ONE }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd)]
 pub struct BitVec (pub BitNum);
@@ -29,9 +50,9 @@ pub trait Bits {
         let mut val = self.bits();
         let mut vec = Vec::new();
         loop {
-            vec.push(if val & 1 == 1 { '1' } else { '0' });
+            vec.push(if val & ONE == ONE { '1' } else { '0' });
             val >>= 1;
-            if val == 0 { break }
+            if val == ZERO { break }
             a += 1;
             if a == b { vec.push('_'); b += 1; a = 0; }
         }
@@ -46,10 +67,39 @@ impl Bits for BitNum {
 }
 
 impl BitVec {
-    #[inline] pub const fn new() -> Self { BitVec(0) }
+    // XXX doesn't need to be a function?  const EMPTY ??
+    #[inline] pub const fn new() -> Self { BitVec(ZERO) }
+}
+
+// XXX maybe add bit(usize) function? then maybe don't need BitVec <<
+#[cfg(not(feature = "u256"))]
+impl BitVec {
+    #[inline] pub const fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
     #[inline] pub const fn set(&mut self, i: usize) { self.0 |= 1 << i }
     #[inline] pub const fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
-    #[inline] pub const fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
+}
+
+// Own implementations needed so these are const, for EDGE_VECS.
+#[cfg(feature = "u256")]
+impl BitVec {
+    #[inline]
+    pub const fn get(&self, i: usize) -> bool {
+        let (hi, lo) = self.0.into_words();
+        if i < 128 { lo & (1 << i) != 0 } else { hi & (1 << (i - 128)) != 0 }
+    }
+    #[inline]
+    pub const fn set(&mut self, i: usize) {
+        let (mut hi, mut lo) = self.0.into_words();
+        // TODO only edit one
+        if i < 128 { lo |= 1 << i } else { hi |= 1 << (i - 128) }
+        self.0 = BitNum::from_words(hi, lo);
+    }
+    #[inline]
+    pub const fn unset(&mut self, i: usize) {
+        let (mut hi, mut lo) = self.0.into_words();
+        if i < 128 { lo &= !(1 << i) } else { hi &= !(1 << (i - 128)) }
+        self.0 = BitNum::from_words(hi, lo);
+    }
 }
 
 impl Default for BitVec { fn default() -> Self { Self::new() } }
@@ -68,7 +118,7 @@ pub struct Graph { pub size: usize, pub edges: Triangle }
 
 impl Triangle {
     #[inline]
-    pub const fn empty(_sz: usize) -> Self { Triangle(BitVec(0)) }
+    pub const fn empty(_sz: usize) -> Self { Triangle(BitVec::new()) }
     #[inline]
     pub const fn get(&self, (a, b): Pair) -> bool { self.0.get(index(a, b)) }
     #[inline]
@@ -102,10 +152,10 @@ pub fn rev_index(i: usize) -> Pair {
 }
 
 const EDGE_VECS: [BitNum; MAX_SIZE] = {
-    let mut vecs = [0; MAX_SIZE];
+    let mut vecs = [ZERO; MAX_SIZE];
     let mut i = 0;
     while i < MAX_SIZE {
-        let mut tri = Triangle(BitVec(0));
+        let mut tri = Triangle(BitVec::new());
         let mut j = 0;
         while j < MAX_SIZE {
             if i != j { tri.set((i, j)) }
@@ -133,7 +183,7 @@ impl Graph {
     }
     pub const fn triangle(sz: usize) -> usize { sz*sz.wrapping_sub(1)/2 } // sz=0 is dubious but used
     pub fn from_fn(size: usize, f: impl Fn(usize, usize) -> bool) -> Self {
-        let mut edges = Triangle(BitVec(0));
+        let mut edges = Triangle(BitVec::new());
         for b in 1..size { for a in 0..b {
             if f(a, b) { edges.set((a, b)) }
         }}
@@ -141,7 +191,7 @@ impl Graph {
     }
     pub fn unrenumber(&self, p: &Perm) -> Self {
         let size = self.size;
-        let mut edges = Triangle(BitVec(0));
+        let mut edges = Triangle(BitVec::new());
         for b in 1..size { for a in 0..b {
             if self.edges.get((p.apply(a), p.apply(b))) {
                 edges.set((a, b));
@@ -161,7 +211,7 @@ impl Graph {
         self.edges.0.0.count_ones() as usize
     }
     pub fn complement(&self) -> Self {
-        let vec = ((1 << Graph::triangle(self.size)) - 1) ^ self.edges.0.0;
+        let vec = one_bits(Graph::triangle(self.size)) ^ self.edges.0.0;
         Graph { size: self.size, edges: Triangle(BitVec(vec)) }
     }
     #[inline]
@@ -189,7 +239,14 @@ impl Bits for Graph {
 }
 
 pub fn random_graph(rng: &mut impl rand::Rng, size: usize) -> Graph {
-    Graph::from_bits(size, rng.gen_range(0..(1 << Graph::triangle(size))))
+    #[cfg(not(feature = "u256"))]
+    let bits = rng.gen_range(0..(1 << Graph::triangle(size)));
+    #[cfg(feature = "u256")]
+    let bits = {
+        let value = BitNum::from_words(rng.r#gen(), rng.r#gen());
+        value & one_bits(Graph::triangle(size))
+    };
+    Graph::from_bits(size, bits)
 }
 
 
@@ -236,14 +293,21 @@ mod tests {
     }
     #[test]
     fn test_show_bits() {
-        let gr = Graph::from_bits(10, 0);
+        let gr = Graph::from_bits(10, ZERO);
         assert_eq!(gr.edges.show_bits(), "0");
-        let gr = Graph::from_bits(10, 0b1100101);
+        let gr = Graph::from_bits(10, BitNum::from(0b1100101u8));
         assert_eq!(gr.edges.show_bits(), "1_100_10_1");
     }
     #[test]
     fn test_edge_vec() {
-        assert_eq!(EDGE_VECS[10], 0x8002001001002007fe00000000000_u128 as BitNum);
+        for i in 0..MAX_SIZE {
+            for j in 0..MAX_SIZE {
+                if i != j {
+                    assert!(BitVec(EDGE_VECS[i]).get(index(i, j)));
+                }
+            }
+            assert_eq!(EDGE_VECS[i].count_ones() as usize, MAX_SIZE - 1);
+        }
     }
 }
 

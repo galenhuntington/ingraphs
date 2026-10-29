@@ -38,7 +38,7 @@ pub fn read<B: Bits>(size: usize) -> Vec<B> {
 pub fn run_graphs(_size: usize) {
     // println!("{:?}", seek::seek(&Graph::from_bits(5, 30)));
     // println!("{:?}", seek::seek(&Graph::from_bits(9, 101752)));
-    println!("{:?}", seek::seek_full(&Graph::from_bits(10, 2202040)));
+    println!("{:?}", seek::seek_full(&Graph::from_bits(10, BitNum::from(2202040u64))));
     // println!("{:?}", seek::seek(&Graph::from_bits(10, 2167546)));
 }
 

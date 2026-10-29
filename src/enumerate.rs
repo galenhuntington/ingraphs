@@ -1,6 +1,5 @@
 use crate::base;
-use crate::base::{BitNum,BitVec,Graph,Triangle,Bits,MAX_SIZE};
-use crate::tools::one_bits;
+use crate::base::{BitNum,BitVec,Graph,Triangle,Bits,MAX_SIZE,one_bits,ZERO,ONE};
 use crate::perm::Perm;
 use std::cmp::Ordering::*;
 
@@ -28,12 +27,12 @@ fn get_breaks(bits: BitNum) -> BitNum {
 
 fn smoosh(row: BitNum, breaks: BitNum) -> BitNum {
     let mut row = row;
-    let mut result = 0;
+    let mut result = ZERO;
     let breaks = BitVec(breaks);
     // eprintln!("{} {}", row, breaks.0);
     loop {
         if row == 0 { return result }
-        let start = row.ilog2() as usize;
+        let start = (BitNum::BITS - 1 - row.leading_zeros()) as usize;
         let mut find = 0;
         for i in 1.. {
             if i > start { break; }
@@ -47,7 +46,7 @@ fn smoosh(row: BitNum, breaks: BitNum) -> BitNum {
         let cnt = (row & !mask).count_ones();
         // eprintln!("start={} find={} mask={}", start, find, mask);
         row &= mask;
-        result |= ((1 << cnt) - 1) << find;
+        result |= one_bits(1 << cnt) << find;
     }
 }
 
@@ -129,6 +128,9 @@ fn vert_mask(tri: &Triangle, v: usize) -> u32 {
     m
 }
 
+#[inline]
+fn andns1(a: BitNum) -> BitNum { a & !(a >> 1usize) }
+
 // The old way didn't really work, new approach.
 fn new_recurse<T: RVal>(
     cur: BitNum,
@@ -139,7 +141,7 @@ fn new_recurse<T: RVal>(
     if pt == 0 { return T::val(T::score(cur)) }
     let tri = Triangle(BitVec(cur));
     let basis = (cutoff >> Graph::triangle(pt)) & one_bits(pt);
-    let next_break = break_bits | (basis & !(basis >> 1));
+    let next_break = break_bits | andns1(basis);
     /*
     if !new_recurse(cur, pt - 1, next_break, cutoff) {
         return false;
@@ -159,7 +161,7 @@ fn new_recurse<T: RVal>(
             // this optimization barely helps
             BitVec((cur >> Graph::triangle(pt)) & one_bits(pt))
         } else {
-            let mut slice = BitVec(0);
+            let mut slice = BitVec::new();
             for bit in 0 .. pt {
                 if tri.get((swap, if bit == swap { pt } else { bit })) {
                     slice.set(bit)
@@ -200,7 +202,7 @@ fn new_recurse<T: RVal>(
         let new_val = new_recurse(
             new_cur,
             pt - 1,
-            if T::FAIL_FAST { next_break } else { break_bits | (cand & !(cand >> 1)) },
+            if T::FAIL_FAST { next_break } else { break_bits | andns1(cand) },
             cutoff);
         if T::fail_fast_on(new_val) {
             return T::fail()
@@ -213,7 +215,7 @@ fn new_recurse<T: RVal>(
 
 pub fn is_best(gr: &Graph) -> bool {
     // eprintln!("is_best({} {} {:b})", gr, gr.edges.0.0, gr.edges.0.0);
-    new_recurse(gr.bits(), gr.size - 1, 0, gr.bits())
+    new_recurse(gr.bits(), gr.size - 1, ZERO, gr.bits())
 }
 
 pub fn to_best(gr: &Graph) -> Graph {
@@ -221,7 +223,7 @@ pub fn to_best(gr: &Graph) -> Graph {
     let mut last = gr.bits();
     // XXX unclear why I need multiple calls
     loop {
-        let next: BitNum = new_recurse(last, gr.size - 1, 0, last);
+        let next: BitNum = new_recurse(last, gr.size - 1, ZERO, last);
         if next == last { return Graph::from_bits(gr.size, last) }
         last = next;
     }
@@ -235,9 +237,11 @@ fn recurse(
     let so_far_ones = so_far.count_ones();
     let (row_lo, row_hi) = match fixed.prefix.get(fixed.size - 1 - at) {
         Some(&p) => (p, p + 1),
-        None => (0, 1 << at),
+        None => (ZERO, ONE << at),
     };
-    'outer: for row in row_lo..row_hi {
+    let rows = std::iter::successors(Some(row_lo), |row| Some(*row + 1))
+        .take_while(|row| *row < row_hi);
+    'outer: for row in rows {
         let mut recheck = recheck;
         // eprintln!("at={} break_bits={:b} so_far={:b} row={:b}", at, break_bits, so_far, row);
         let cur_ones = (so_far_ones + row.count_ones()) as usize;
@@ -245,13 +249,13 @@ fn recurse(
         if (get_breaks(row) & !break_bits) != 0 { continue }
         if so_far > 0 {
             let at_mask = !one_bits(at);
-            let mut breaks = 0;
+            let mut breaks = ZERO;
             for (alt, other) in fixed.line.iter().enumerate() {
                 let alt = fixed.size - 1 - alt;
                 let mask = one_bits(alt) & at_mask;
                 if breaks & mask == 0 {
                     let upper = {
-                        let mut upper = BitVec(0);
+                        let mut upper = BitVec::new();
                         let gr1 = Triangle(BitVec(so_far));
                         for b in at + 1 .. alt {
                             if gr1.get((b, at)) {
@@ -273,7 +277,7 @@ fn recurse(
                         _ => { }
                     }
                 }
-                breaks |= *other & !(*other >> 1);
+                breaks |= andns1(*other);
             }
         }
         let new_so_far = so_far | (row << offset);
@@ -288,7 +292,7 @@ fn recurse(
             fixed,
             Recursed {
                 at: at - 1,
-                break_bits: break_bits | (row & !(row >> 1)),
+                break_bits: break_bits | andns1(row),
                 so_far: new_so_far,
                 recheck,
             },
@@ -318,8 +322,8 @@ pub fn enumerate_subtree(
         },
         Recursed {
             at: size - 1,
-            break_bits: 0,
-            so_far: 0,
+            break_bits: ZERO,
+            so_far: ZERO,
             recheck: false,
         },
     );
@@ -332,7 +336,7 @@ pub fn enumerate_middle(size: usize, mut callback: impl FnMut(BitNum)) {
         let mut last = grc.bits();
         loop {
             if last < bn { break }
-            let next: BitNum = new_recurse(last, size - 1, 0, last);
+            let next: BitNum = new_recurse(last, size - 1, ZERO, last);
             if next == last { callback(bn); break }
             last = next;
         }
@@ -347,10 +351,16 @@ mod tests {
 
     #[test]
     fn test_smoosh() {
-        assert_eq!(smoosh(0b_110_01_0, 0), 0b_11_1);
-        assert_eq!(smoosh(0b_110_01_0, 0b1_0), 0b_1_10_1);
-        assert_eq!(smoosh(0b_110_01_0, 0b11_0), 0b_11_00_1);
-        assert_eq!(smoosh(0b_101_01_0, 0b1_01_0), 0b_10_10_1);
+        pub fn smoosh_u8(a: u8, b: u8) -> u8 {
+            let n = smoosh(BitNum::from(a), BitNum::from(b));
+            #[cfg(feature = "u256")]
+            let n = n.as_u8();
+            n as u8
+        }
+        assert_eq!(smoosh_u8(0b_110_01_0, 0), 0b_11_1);
+        assert_eq!(smoosh_u8(0b_110_01_0, 0b1_0), 0b_1_10_1);
+        assert_eq!(smoosh_u8(0b_110_01_0, 0b11_0), 0b_11_00_1);
+        assert_eq!(smoosh_u8(0b_101_01_0, 0b1_01_0), 0b_10_10_1);
     }
 
     #[test]
@@ -392,8 +402,7 @@ mod tests {
         let rng = &mut rand::thread_rng();
         for _ in 0 .. 300 {
             let size = rng.gen_range(1..=9);
-            let mut rand_bits = || rng.gen_range(0..(1 << Graph::triangle(size)));
-            let gr = Graph::from_bits(size, rand_bits());
+            let gr = crate::base::random_graph(rng, size);
             let gr_best = tools::naive_find_best(&gr);
             assert_eq!(is_best(&gr), gr == gr_best);
             assert!(is_best(&gr_best));
