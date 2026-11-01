@@ -3,8 +3,8 @@
 //! SAT is provisional until both colours pass the graph oracle. Local UNSAT
 //! rules out only the printed anchor/free-edge subcube, not the candidate.
 
-use crate::base::ONE;
 use super::*;
+use crate::base::one_bits;
 use counted::Counter;
 use rustsat::solvers::{
     ControlSignal, GetInternalStats, PhaseLit, Solve, SolveIncremental, SolverResult, Terminate,
@@ -127,6 +127,7 @@ fn literal(edge: usize, value: bool) -> Lit {
 
 impl Engine {
     fn new(variables: usize, seed: u64, factor: bool) -> Self {
+        assert!(variables <= BitNum::BITS as usize);
         let mut solver = CaDiCaL::default();
         solver
             .set_option("seed", (seed % i32::MAX as u64) as i32)
@@ -146,7 +147,7 @@ impl Engine {
     }
 
     fn add_copy(&mut self, mask: BitNum) -> bool {
-        assert_eq!(mask >> self.variables, 0);
+        assert_eq!(mask & !one_bits(self.variables), 0);
         if !self.seen.insert(mask) {
             return false;
         }
@@ -161,7 +162,7 @@ impl Engine {
     fn phases(&mut self, host: BitNum) {
         for e in 0..self.variables {
             self.solver
-                .phase_lit(literal(e, host & (1 << e) != 0))
+                .phase_lit(literal(e, host & bit(e) != 0))
                 .unwrap();
         }
     }
@@ -175,8 +176,8 @@ impl Engine {
         conflicts: i32,
     ) -> Answer {
         let assumptions: Vec<_> = (0..self.variables)
-            .filter(|e| free & (1 << e) == 0)
-            .map(|e| literal(e, host & (1 << e) != 0))
+            .filter(|&e| free & bit(e) == 0)
+            .map(|e| literal(e, host & bit(e) != 0))
             .collect();
         self.solver.attach_terminator(move || {
             if deadline.is_some_and(|d| timer.elapsed() >= d) {
@@ -201,10 +202,10 @@ impl Engine {
                     let value = match self.solver.lit_val(literal(e, true)).unwrap() {
                         TernaryVal::True => true,
                         TernaryVal::False => false,
-                        TernaryVal::DontCare => host & (1 << e) != 0,
+                        TernaryVal::DontCare => host & bit(e) != 0,
                     };
                     if value {
-                        model |= ONE << e;
+                        model |= bit(e);
                     }
                 }
                 assert_eq!((model ^ host) & !free, 0, "SAT model violates a fixed edge");
@@ -216,7 +217,7 @@ impl Engine {
                     .core()
                     .unwrap()
                     .iter()
-                    .fold(ZERO, |acc, lit| acc | (ONE << lit.var().idx()));
+                    .fold(ZERO, |acc, lit| acc | bit(lit.var().idx()));
                 assert_eq!(core & free, 0);
                 Answer::Unsat(core)
             }
@@ -261,8 +262,8 @@ impl Engine {
             }
         }
         for e in 0..self.variables {
-            if free & (1 << e) == 0 {
-                writeln!(file, "{} 0", literal(e, host & (1 << e) != 0).to_ipasir()).unwrap();
+            if free & bit(e) == 0 {
+                writeln!(file, "{} 0", literal(e, host & bit(e) != 0).to_ipasir()).unwrap();
             }
         }
     }
@@ -292,28 +293,28 @@ fn choose_block(
             let best = edges
                 .iter()
                 .copied()
-                .filter(|e| free & (1 << e) == 0)
+                .filter(|&e| free & bit(e) == 0)
                 .max_by_key(|e| {
                     copies
                         .iter()
-                        .filter(|&&m| m & free == 0 && m & (1 << e) != 0)
+                        .filter(|&&m| m & free == 0 && m & bit(*e) != 0)
                         .count()
                 });
             let Some(e) = best else {
                 break;
             };
-            if !copies.iter().any(|&m| m & free == 0 && m & (1 << e) != 0) {
+            if !copies.iter().any(|&m| m & free == 0 && m & bit(e) != 0) {
                 break;
             }
-            free |= 1 << e;
+            free |= bit(e);
         }
         let support = copies.iter().fold(ZERO, |a, &m| a | m);
         for &e in &edges {
             if free.count_ones() as usize == target {
                 break;
             }
-            if support & (ONE << e) != 0 {
-                free |= ONE << e;
+            if support & bit(e) != 0 {
+                free |= bit(e);
             }
         }
     }
@@ -321,14 +322,14 @@ fn choose_block(
         if free.count_ones() as usize == size {
             break;
         }
-        free |= 1 << e;
+        free |= bit(e);
     }
     if matches!(mode, BlockMode::Directed) && size >= 2 {
         for color in [host.bits(), host.complement().bits()] {
             if color != 0 && free & color == 0 {
-                let add = *edges.iter().find(|&&e| color & (1 << e) != 0).unwrap();
+                let add = *edges.iter().find(|&&e| color & bit(e) != 0).unwrap();
                 let remove = free.trailing_zeros() as usize;
-                free = (free ^ (1 << remove)) | (1 << add);
+                free = (free ^ bit(remove)) | bit(add);
             }
         }
     }
@@ -343,8 +344,8 @@ struct Outcome {
     core: BitNum,
     host: Graph,
     last: Graph,
-    best_copies: Option<u64>,
-    initial_copies: Option<u64>,
+    best_copies: Option<u128>,
+    initial_copies: Option<u128>,
     rounds: usize,
     checks: usize,
     added: usize,
@@ -772,6 +773,29 @@ pub fn run(args: Args) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn high_variable_phases_assumptions_models_and_cores() {
+        // Exercise even the very top bit; valid graph orders use slightly less.
+        let width = BitNum::BITS as usize;
+        let high = bit(width - 1);
+        let low = bit(0);
+        let mut engine = Engine::new(width, 1, false);
+        engine.add_copy(low | high);
+        engine.phases(high);
+        let Answer::Model(model) = engine.solve(high, ZERO, Instant::now(), None, 0) else {
+            panic!("a fixed mixed-colour copy is satisfiable");
+        };
+        assert_eq!(model, high);
+        let Answer::Unsat(core) = engine.solve(ZERO, ZERO, Instant::now(), None, 0) else {
+            panic!("a fixed monochromatic copy is unsatisfiable");
+        };
+        assert_eq!(core, low | high);
+        let Answer::Model(model) = engine.solve(ZERO, high, Instant::now(), None, 0) else {
+            panic!("freeing the high bit permits repair");
+        };
+        assert_eq!(model, high);
+    }
+
     fn unlimited() -> Config {
         Config {
             seconds: 0.0,
@@ -843,7 +867,7 @@ mod tests {
                     assert_eq!(q as usize, copies.len());
                 }
                 if cap == 10000 {
-                    assert_eq!(score, Some(copies.len() as u64));
+                    assert_eq!(score, Some(u128::try_from(copies.len()).unwrap()));
                 }
             }
             let (found, score) = counter.collect(host, Instant::now(), Some(Duration::ZERO), 4);
@@ -868,7 +892,7 @@ mod tests {
                 let anchor = random_graph(&mut rng, 4);
                 let free = BitNum::from(rng.gen_range(0..64u8));
                 let possible = (0..64).any(|h| {
-                    (h as u128 ^ anchor.bits()) & !free == 0
+                    (BitNum::from(h) ^ anchor.bits()) & !free == 0
                         && naive_refutes(&pattern, Graph::from_u64(4, h))
                 });
                 let out = block(
@@ -927,13 +951,17 @@ mod tests {
             rounds: 0,
             ..unlimited()
         };
-        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| test_val);
+        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| {
+            test_val
+        });
         assert_eq!(out.status, "round-limit");
         let config = Config {
             seconds: f64::MIN_POSITIVE,
             ..unlimited()
         };
-        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| test_val);
+        let out = block(&mut engine, &counter, &pattern, anchor, &config, |_| {
+            test_val
+        });
         assert_eq!(out.status, "time-limit");
         assert_ne!(out.best_copies, Some(0));
     }

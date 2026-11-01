@@ -8,6 +8,7 @@ column is a substitute for recounting. Timed-out scores are never used.
 """
 
 import argparse
+from graphy_binary import require
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import hashlib
@@ -107,6 +108,10 @@ def main():
     parser.add_argument("--jobs", type=int, default=4, help="candidates counted concurrently")
     parser.add_argument("--rng-seed", type=int, default=0)
     args = parser.parse_args()
+    try:
+        require(args.binary, [args.n])
+    except ValueError as error:
+        parser.error(str(error))
     if args.n < 1 or args.jobs < 1 or min(args.per_layer, args.keep) < 0:
         parser.error("n/jobs must be positive; per-layer/keep must be nonnegative")
     if not math.isfinite(args.seconds) or args.seconds < 0:

@@ -15,8 +15,10 @@ from orbitals import cyclic_actions, edge_orbits, idx
 
 
 def normalize(n, cells):
-    if not 1 <= n <= 16:
-        raise ValueError("this launcher supports graphy's default orders 1..16")
+    # Python masks are arbitrary precision. The launcher, not partition
+    # mathematics, enforces the selected executable's advertised order limit.
+    if n < 1:
+        raise ValueError("order must be positive")
     full, covered = (1 << (n * (n - 1) // 2)) - 1, 0
     cells = tuple(sorted(cells))
     for cell in cells:

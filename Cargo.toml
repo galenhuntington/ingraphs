@@ -2,18 +2,18 @@
 name = "graphy"
 version = "0.1.0"
 edition = "2024"
-# this doesn't work with [[bin]] below
-# autobins = true
+default-run = "graphy"
 
-# [[bin]]
-# name = "graphy"
-# path = "src/main.rs"
+[[bin]]
+name = "graphy"
+path = "src/main.rs"
 
-# Warns me about same path.
-# [[bin]]
-# name = "graphy-u64"
-# path = "src/main.rs"
-# required-features = ["u64"]
+[[bin]]
+name = "graphy-u256"
+path = "src/bin/graphy-u256.rs"
+required-features = ["u256"]
+# The wrapper includes exactly the same code; run the unit tests once.
+test = false
 
 [profile.release]
 lto = true
@@ -46,4 +46,3 @@ dashmap = "6.1.0"
 rustsat = { version = "=0.7.5", default-features = false, optional = true }
 rustsat-cadical = { version = "=0.7.5", features = ["v2-2-1"], optional = true }
 ethnum = { version = "1.5.3", optional = true }
-

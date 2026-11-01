@@ -17,9 +17,10 @@ import subprocess
 import sys
 import tempfile
 from threading import Lock, Thread
+from graphy_binary import require
 
 
-BINARY = str(Path(__file__).resolve().parents[1] / "target/release/graphy")
+BINARY = os.environ.get("GRAPHY_BINARY", str(Path(__file__).resolve().parents[1] / "target/release/graphy"))
 FIELDS = ("n,candidate,refuter,status,restart,walk_seed,flips,checks,constraints,violated,"
           "seconds,oracle_seconds,start_host,saved_host,distance,best_copies,method,source_seed,"
           "record,pair_evaluations,pair_moves,outside_moves,best_step,"
@@ -36,6 +37,7 @@ def read_results(paths):
 
 def canonical_keys(binary, n, hosts):
     """Full packed keys, not hashes; live hosts are never relabelled here."""
+    require(binary, [n])
     result = subprocess.run([binary, "canon", str(n), "/dev/stdin",
                              "--internal-labels", "--complement"],
                             input="".join(f"{h}\n" for h in hosts), text=True,
@@ -67,16 +69,19 @@ def collect_results(paths):
 
 
 def select_seeds(paths, keep, max_score=None, *, binary=BINARY, candidates=None,
-                 canonicalize=None, report=None, catalog=None):
+                 canonicalize=None, report=None, catalog=None, orders=None):
     groups, refuted, _ = catalog if catalog is not None else collect_results(paths)
     groups = {key: {h: q for h, q in hosts.items() if max_score is None or q <= max_score}
               for key, hosts in groups.items() if key not in refuted
+              and (orders is None or key[0] in orders)
               and (candidates is None or key[1] in candidates)}
     groups = {key: hosts for key, hosts in groups.items() if hosts}
     by_order = {}
     for (n, _), hosts in groups.items():
         by_order.setdefault(n, set()).update(hosts)
     keys = {}
+    if not canonicalize:
+        require(binary, by_order)
     for n, hosts in by_order.items():
         hosts = sorted(hosts)
         values = canonicalize(n, hosts) if canonicalize else canonical_keys(binary, n, hosts)
@@ -101,6 +106,7 @@ def cross_refutations(binary, n, candidates, witnesses):
     """Use the separate existence matcher, not the repair objective, to share hits."""
     if not candidates or not witnesses:
         return {}
+    require(binary, [n])
     with tempfile.TemporaryDirectory(prefix="graphy-repair-cull-") as directory:
         library = Path(directory) / "witnesses.txt"
         library.write_text("".join(f"{h}\n" for h in sorted(set(witnesses))))

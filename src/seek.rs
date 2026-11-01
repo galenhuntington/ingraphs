@@ -1,4 +1,4 @@
-use crate::base::{Graph,Bits,MAX_SIZE};
+use crate::base::{Graph,Bits,MAX_SIZE,bit};
 use crate::canon;
 use crate::tools;
 use crate::enumerate;
@@ -30,11 +30,9 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
             let skew = fixed.rng.gen_range(0..hi);
             for b in 0..hi {
                 if fixed.quit.load(Ordering::Relaxed) { return None }
-                // let bit = 1 << b;
-                // let bit = 1 << (hi - 1 - b);
-                let bit = 1 << { let b = b + skew; if b >= hi { b - hi } else { b } };
-                if grtw.bits() & bit == 0 { continue }
-                let grnext = ce.bits() | bit;
+                let mask = bit({ let b = b + skew; if b >= hi { b - hi } else { b } });
+                if grtw.bits() & mask == 0 { continue }
+                let grnext = ce.bits() | mask;
                 // eprintln!("{}: {} -> {}", b, grtw, grnext);
                 let grnext = Graph::from_bits(fixed.gr.size, grnext);
                 // eprintln!("1 {}: {} -> {}; {}", b, grtw, grnext, fixed.gr);

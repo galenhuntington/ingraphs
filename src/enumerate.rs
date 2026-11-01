@@ -1,5 +1,5 @@
 use crate::base;
-use crate::base::{BitNum,BitVec,Graph,Triangle,Bits,MAX_SIZE,one_bits,ZERO,ONE};
+use crate::base::{BitNum,BitVec,Graph,Triangle,Bits,MAX_SIZE,bit,one_bits,ZERO};
 use crate::perm::Perm;
 use std::cmp::Ordering::*;
 
@@ -246,7 +246,7 @@ fn recurse(
     let so_far_ones = so_far.count_ones();
     let (row_lo, row_hi) = match fixed.prefix.get(fixed.size - 1 - at) {
         Some(&p) => (p, p + 1),
-        None => (ZERO, ONE << at),
+        None => (ZERO, bit(at)),
     };
     let rows = std::iter::successors(Some(row_lo), |row| Some(*row + 1))
         .take_while(|row| *row < row_hi);

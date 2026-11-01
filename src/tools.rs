@@ -4,7 +4,7 @@
     This is extracted from a larger module in another project.
 */
 
-use crate::base::{BitNum,Graph,Bits,rev_hi_index,MAX_SIZE,ZERO};
+use crate::base::{BitNum,Graph,Bits,rev_hi_index,MAX_SIZE,ZERO,bit};
 use crate::perm::{Perm,all_perms};
 use crate::enumerate;
 use std::cmp::Reverse;
@@ -14,7 +14,8 @@ use std::collections::{BTreeMap,BTreeSet};
 
 #[inline]
 pub fn factorial(n: usize) -> u128 {
-    (1 ..= n as u128).product()
+    (1..=n).try_fold(1u128, |product, k|
+        product.checked_mul(u128::try_from(k).unwrap())).expect("factorial overflow")
 }
 
 pub fn timestamp() -> String {
@@ -112,7 +113,7 @@ impl AutCount<'_> {
     fn go(&mut self, i: usize) -> u128 {
         if i == self.verts.len() { return 1 }
         let v = self.verts[i];
-        let mut total = 0;
+        let mut total = 0u128;
         for k in 0..self.verts.len() {
             let c = self.verts[k];
             if self.used & (1 << c) != 0 { continue }
@@ -122,7 +123,7 @@ impl AutCount<'_> {
             if ok {
                 self.img[v] = c;
                 self.used |= 1 << c;
-                total += self.go(i + 1);
+                total = total.checked_add(self.go(i + 1)).expect("automorphism count overflow");
                 self.used &= !(1 << c);
             }
         }
@@ -135,7 +136,8 @@ impl AutCount<'_> {
 // colored representative and count the (small) quotient's automorphisms by
 // refinement plus backtracking.
 pub fn count_symmetries(gr: &Graph) -> u128 {
-    if gr.size <= 2 { return gr.size as u128 }
+    assert!(gr.size <= MAX_SIZE, "unsupported graph order");
+    if gr.size <= 2 { return factorial(gr.size) }
     let n = gr.size;
     let adj = adj_masks(gr);
     let mut alive: u32 = (1 << n) - 1;
@@ -159,7 +161,7 @@ pub fn count_symmetries(gr: &Graph) -> u128 {
             let mut sigs: BTreeMap<(usize, usize), usize> = BTreeMap::new();
             for ((c, _), vs) in groups {
                 if vs.len() < 2 { continue }
-                mult *= factorial(vs.len());
+                mult = mult.checked_mul(factorial(vs.len())).expect("automorphism count overflow");
                 for &v in &vs[1..] { alive &= !(1 << v) }
                 let nc = *sigs.entry((c, vs.len())).or_insert_with(|| {
                     next_color += 1;
@@ -208,7 +210,7 @@ pub fn count_symmetries(gr: &Graph) -> u128 {
         img: [usize::MAX; MAX_SIZE],
         used: 0,
     };
-    mult * ac.go(0)
+    mult.checked_mul(ac.go(0)).expect("automorphism count overflow")
 }
 
 const UNFILLED: usize = 0xfffff;
@@ -475,15 +477,14 @@ pub fn naive_is_subgraph_of(sub: &Graph, sup: &Graph) -> bool {
 pub fn bump(gr: &Graph, extend: bool) -> BTreeSet<BitNum> {
     let mut seen = BTreeSet::new();
     let base = gr.bits();
-    for bit in 0 .. Graph::triangle(gr.size) {
-        // let val = base & !(1 << bit);
-        let val = if extend { base | (1 << bit) } else { base & !(1 << bit) };
+    for edge in 0 .. Graph::triangle(gr.size) {
+        let mask = bit(edge);
+        let val = if extend { base | mask } else { base & !mask };
         let gr = Graph::from_bits(gr.size, val);
         if base == val { continue }
         let gr = enumerate::to_best(&gr);
         if seen.contains(&gr.bits()) { continue }
         seen.insert(gr.bits());
-        // eprintln!("{base} {bit} -> {}: {} ({})", gr.bits(), gr, enumerate::is_best(&gr));
     }
     seen
 }
@@ -548,4 +549,3 @@ mod tests {
         }
     }
 }
-

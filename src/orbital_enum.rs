@@ -2,7 +2,7 @@
 //! The input is a base graph followed by disjoint nonzero XOR masks. Enumerate
 //! EVERY assignment, returning exact isomorphism/complement representatives.
 
-use crate::base::{BitNum, Bits, Graph, MAX_SIZE, one_bits, ZERO};
+use crate::base::{BitNum, Bits, Graph, MAX_SIZE, ZERO, one_bits};
 use crate::canon;
 use std::collections::HashSet;
 use std::io::Write;
@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub const PROTOCOL: &str = "orbital-enum-v1";
+pub const MAX_VARIABLES: usize = 20;
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
@@ -22,8 +23,10 @@ fn validate(size: usize, base: BitNum, masks: &[BitNum]) -> Result<(), String> {
     if !(1..=MAX_SIZE).contains(&size) {
         return Err(format!("order must be in 1..={MAX_SIZE}"));
     }
-    if masks.len() > 20 {
-        return Err("a worker cube may have at most 20 variables; split it first".into());
+    if masks.len() > MAX_VARIABLES {
+        return Err(format!(
+            "a worker cube may have at most {MAX_VARIABLES} variables; split it first"
+        ));
     }
     let full = one_bits(Graph::triangle(size));
     if base & !full != 0 {
@@ -103,13 +106,15 @@ pub fn run(args: Args) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::ONE;
+    use crate::base::{ONE, bit};
 
-    fn bn(a: u32) -> BitNum { BitNum::from(a) }
+    fn bn(a: u32) -> BitNum {
+        BitNum::from(a)
+    }
 
     #[test]
     fn all_four_vertex_graphs_and_complement_normalization() {
-        let masks: Vec<_> = (0..6).map(|e| ONE << e).collect();
+        let masks: Vec<_> = (0..6).map(bit).collect();
         let hosts = enumerate(4, ZERO, &masks).unwrap();
         assert_eq!(hosts.len(), 6);
         for h in 0..64u32 {
@@ -126,14 +131,36 @@ mod tests {
             .map(|a| {
                 representative(
                     4,
-                    bn(21u32) ^ (if a & 1 != 0 { 3 } else { 0 })
+                    bn(21u32)
+                        ^ (if a & 1 != 0 { 3 } else { 0 })
                         ^ (if a & 2 != 0 { 12 } else { 0 })
                         ^ (if a & 4 != 0 { 48 } else { 0 }),
                 )
             })
             .collect();
         assert_eq!(hosts.into_iter().collect::<HashSet<_>>(), expected);
-        assert_eq!(enumerate(4, bn(21), &[]).unwrap(), vec![representative(4, bn(21))]);
+        assert_eq!(
+            enumerate(4, bn(21), &[]).unwrap(),
+            vec![representative(4, bn(21))]
+        );
+    }
+
+    #[test]
+    fn highest_edge_cube_has_zero_one_and_two_edge_hosts() {
+        let hosts = enumerate(
+            MAX_SIZE,
+            ZERO,
+            &[bit(0), bit(Graph::triangle(MAX_SIZE) - 1)],
+        )
+        .unwrap();
+        assert_eq!(hosts.len(), 3);
+        assert_eq!(
+            hosts
+                .iter()
+                .map(|h| h.count_ones())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([0, 1, 2])
+        );
     }
 
     #[test]

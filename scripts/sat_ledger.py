@@ -27,6 +27,7 @@ import time
 import uuid
 
 from refine_repair import canonical_keys, cross_refutations
+from graphy_binary import require, check_orders
 
 UNSAT = {"block-unsat", "unrestricted-unsat-unverified"}
 STATUSES = UNSAT | {"refuted", "time-limit", "sat-limit", "round-limit", "constraint-limit"}
@@ -78,7 +79,17 @@ def infer_vertices(n, free):
 class Ledger:
     def __init__(self, path, binary):
         self.binary = str(Path(shutil.which(binary) or binary).resolve())
+        self.capabilities = require(self.binary, sat=True)
         self.path = Path(path).resolve()
+        # Reject a too-narrow executable before re-keying or recovering anything.
+        # Reporting uses a separate read-only path and needs no executable.
+        if self.path.exists():
+            db = sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)
+            try:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='regions'").fetchone():
+                    check_orders(self.capabilities, [r[0] for r in db.execute("SELECT DISTINCT n FROM regions")])
+            finally:
+                db.close()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = open(str(self.path) + ".lock", "a")
         try:
@@ -161,6 +172,7 @@ class Ledger:
         missing = defaultdict(set)
         for row in rows:
             n, candidate = int(row["n"]), int(row["candidate"])
+            check_orders(self.capabilities, [n])
             anchor, selected = int(row["start_host"]), int(row["free_vertices"])
             order, core, free = fixed_graph(n, anchor, selected)
             if not 0 <= candidate < 1 << (n * (n - 1) // 2):

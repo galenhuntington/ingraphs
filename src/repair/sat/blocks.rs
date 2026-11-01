@@ -122,7 +122,10 @@ mod tests {
                 );
                 for v in 1..n {
                     for u in 0..v {
-                        assert_eq!(mask & (ONE << crate::base::index(u, v)) != 0, u < k || v < k);
+                        assert_eq!(
+                            mask & crate::base::bit(crate::base::index(u, v)) != 0,
+                            u < k || v < k
+                        );
                     }
                 }
             }
@@ -162,7 +165,8 @@ mod tests {
             let pattern = Graph::from_u64(4, f);
             let valid = |h| super::super::tests::naive_refutes(&pattern, Graph::from_u64(4, h));
             let global = (0..64).any(valid);
-            let representative = (0..64).any(|h| (h as u128 ^ b.anchor.bits()) & !b.free == 0 && valid(h));
+            let representative =
+                (0..64).any(|h| (BitNum::from(h) ^ b.anchor.bits()) & !b.free == 0 && valid(h));
             assert_eq!(global, representative);
         }
     }
@@ -171,7 +175,8 @@ mod tests {
     fn expansion_hits_core_preserves_anchor_and_never_repeats_a_class() {
         let mut rng = StdRng::seed_from_u64(89);
         let original = region(Graph::from_u64(6, 1734), 1);
-        let core = (ONE << crate::base::index(2, 3)) | (ONE << crate::base::index(2, 4));
+        let core =
+            crate::base::bit(crate::base::index(2, 3)) | crate::base::bit(crate::base::index(2, 4));
         let mut seen = HashSet::new();
         let next = expand(original, core, 3, &seen, &mut rng).unwrap();
         // Vertex 2 is the only one hitting both failed assumptions.
@@ -204,7 +209,7 @@ mod tests {
                 let feasible = |b: VertexBlock| {
                     refuters
                         .iter()
-                        .any(|h| (*h as u128 ^ b.anchor.bits()) & !b.free == 0)
+                        .any(|h| (BitNum::from(*h) ^ b.anchor.bits()) & !b.free == 0)
                 };
                 for &host in &seeds {
                     for selected in (0..32u32).filter(|s| s.count_ones() as usize == k) {

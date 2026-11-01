@@ -31,6 +31,7 @@ import time
 import uuid
 
 from orbital_families import Family, catalog, normalize
+from graphy_binary import require
 from refine_repair import BINARY
 
 SCHEMA = "orbital-sat-v1"
@@ -313,16 +314,25 @@ def main():
     if args.status or args.export_csv:
         read_only(args)
         return
-    if args.order is None or not 1 <= args.order <= 16:
-        parser.error("--order in 1..16 is required")
+    if args.order is None:
+        parser.error("--order is required")
+    try:
+        args.capabilities = require(args.binary, [args.order], sat=True)
+    except ValueError as error:
+        parser.error(str(error))
     if min(args.jobs, args.batch, args.max_constraints) < 1 or min(args.rounds, args.conflicts, args.rng_seed) < 0:
         parser.error("jobs/batch/max-constraints must be positive; other budgets/seed nonnegative")
     if args.conflicts > 2147483647 or args.rng_seed > 18446744073709551615:
         parser.error("conflicts must fit i32; rng-seed must fit u64")
     if not math.isfinite(args.seconds) or args.seconds < 0:
         parser.error("seconds must be finite and nonnegative")
-    if not 0 <= args.min_variables <= args.max_variables <= 120:
-        parser.error("require 0 <= min-variables <= max-variables <= 120")
+    if not 0 <= args.min_variables <= args.max_variables:
+        parser.error("require 0 <= min-variables <= max-variables")
+    # A requested cap larger than the build/order can produce is harmless;
+    # clamp it (including the default 64 on u64) before generating families.
+    args.max_variables = min(args.max_variables, args.capabilities["max_edges"])
+    if args.min_variables > args.max_variables:
+        parser.error("min-variables exceeds this binary's edge capacity")
     candidates = set(args.candidate)
     if args.candidates:
         with open(args.candidates) as source:

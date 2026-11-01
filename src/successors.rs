@@ -1,6 +1,6 @@
 //! One-edge extensions all of whose one-edge retractions are in the pool.
 use crate::{
-    base::{BitNum, Bits, Graph, MAX_SIZE, ONE},
+    base::{BitNum, Bits, Graph, MAX_SIZE, bit},
     canon,
 };
 use std::collections::BTreeSet;
@@ -23,7 +23,7 @@ pub fn generate(size: usize, pool: impl Iterator<Item = BitNum>) -> impl Iterato
         while remaining != 0 {
             let b = remaining.trailing_zeros();
             remaining &= remaining - 1;
-            let retraction = Graph::from_bits(size, gr.bits() ^ (ONE << b));
+            let retraction = Graph::from_bits(size, gr.bits() ^ bit(b as usize));
             if !pool.contains(&canon::key(&retraction)) {
                 return None;
             }
@@ -88,5 +88,20 @@ mod tests {
         assert_eq!(generate(0, std::iter::empty()).count(), 0);
         assert_eq!(generate(1, [0, 0].map(f).into_iter()).count(), 0);
         assert_eq!(generate(3, [1, 1, 2, 4].map(f).into_iter()).count(), 1);
+    }
+
+    #[test]
+    fn highest_edge_input_has_both_two_edge_successors() {
+        let pool = [bit(Graph::triangle(MAX_SIZE) - 1)];
+        let next: Vec<_> = generate(MAX_SIZE, pool.into_iter()).collect();
+        // P3 + isolates and two disjoint edges + isolates.
+        assert_eq!(next.len(), 2);
+        assert!(next.iter().all(|g| g.edge_count() == 2));
+        assert_eq!(
+            next.iter()
+                .map(|g| (0..g.size).map(|v| g.degree_of(v)).max().unwrap())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([1, 2])
+        );
     }
 }

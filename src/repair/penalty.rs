@@ -72,12 +72,12 @@ impl Penalties {
         }
     }
 
-    pub fn deltas(&self, host: BitNum, variables: usize) -> Vec<i64> {
+    pub fn deltas(&self, host: BitNum, variables: usize) -> Vec<i128> {
         let mut deltas = vec![0; variables];
         for &Entry { mask, weight } in &self.entries {
             let red = mask & host;
             let blue = mask & !host;
-            let weight = weight as i64;
+            let weight = i128::from(weight);
             if red == 0 || blue == 0 {
                 for e in bits(mask) {
                     deltas[e] -= weight;
@@ -95,11 +95,11 @@ impl Penalties {
     }
 
     #[cfg(test)]
-    fn cost(&self, host: BitNum) -> i64 {
+    fn cost(&self, host: BitNum) -> i128 {
         self.entries
             .iter()
             .filter(|e| e.mask & host == 0 || e.mask & !host == 0)
-            .map(|e| e.weight as i64)
+            .map(|e| i128::from(e.weight))
             .sum()
     }
 }
@@ -121,7 +121,7 @@ mod tests {
             let host = BitNum::from(host);
             let old = memory.cost(host);
             for (e, delta) in memory.deltas(host, 6).into_iter().enumerate() {
-                assert_eq!(delta, memory.cost(host ^ (1 << e)) - old);
+                assert_eq!(delta, memory.cost(host ^ crate::base::bit(e)) - old);
             }
         }
     }
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(memory.len(), 1); // the weight-one old entry was smoothed away
         memory.boost([bn5], MAX_WEIGHT, 0);
         memory.boost([bn5], MAX_WEIGHT, 0);
-        assert_eq!(memory.cost(ZERO), MAX_WEIGHT as i64);
+        assert_eq!(memory.cost(ZERO), i128::from(MAX_WEIGHT));
         let mut ring = Penalties::new(3);
         for mask in [bn3, bn5, BitNum::from(6u8), bn9] {
             ring.boost([mask], 4, 5);

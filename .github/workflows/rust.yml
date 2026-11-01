@@ -13,10 +13,24 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["sat", "u64,sat", "u256,sat"]
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install SAT binding prerequisites
+      run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --release --features '${{ matrix.features }}'
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --release --bin graphy --features '${{ matrix.features }}'
+    - name: Check pure-Rust canonicalizer fallback
+      run: cargo check --no-default-features --features '${{ matrix.features }}'
+    - name: Python integration tests
+      if: matrix.features != 'u64,sat'
+      run: python3 -m unittest discover -s scripts -p 'test_*.py'
+    - name: Small-width capability checks
+      if: matrix.features == 'u64,sat'
+      run: python3 -m unittest discover -s scripts -p 'test_capabilities.py'

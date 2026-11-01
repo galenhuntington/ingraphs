@@ -193,8 +193,17 @@ class OrbitalCliTests(unittest.TestCase):
             try:
                 until = time.monotonic()+10
                 while not children and time.monotonic()<until and proc.poll() is None:
-                    for path in Path(f"/proc/{proc.pid}/task").glob("*/children"):
-                        children.update(map(int,path.read_text().split()))
+                    running = False
+                    ledger_path = Path(directory)/"ledger.sqlite"
+                    if ledger_path.exists():
+                        with sqlite3.connect(ledger_path) as db:
+                            try:
+                                running = db.execute("SELECT count(*) FROM attempts WHERE state='running'").fetchone()[0] > 0
+                            except sqlite3.OperationalError:
+                                pass
+                    if running:
+                        for path in Path(f"/proc/{proc.pid}/task").glob("*/children"):
+                            children.update(map(int,path.read_text().split()))
                     time.sleep(0.01)
                 self.assertTrue(children,"expected active graphy child")
                 proc.terminate()

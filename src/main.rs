@@ -9,6 +9,7 @@ pub mod canon;
 pub mod successors;
 pub mod repair;
 pub mod orbital_enum;
+pub mod capabilities;
 
 use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::BTreeSet;
@@ -306,6 +307,8 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: Option<BitNum>
 
 #[derive(Debug,Subcommand)]
 enum C {
+    /// Print machine-readable JSON describing this binary's limits and features
+    Capabilities,
     /// Enumerate a bounded affine graph cube (worker for scripts/orbital_enum.py)
     OrbitalEnum(orbital_enum::Args),
     /// Seeded counterexample repair by exact copy counts or learned constraints
@@ -539,6 +542,7 @@ fn parse_subgraph_args(strs: Vec<String>) -> Option<(Vec<BitNum>, Vec<BitNum>)> 
 pub fn main() {
     let args = Cli::parse();
     match args.command {
+        C::Capabilities => println!("{}", capabilities::json()),
         C::OrbitalEnum(args) => {
             if let Err(error) = orbital_enum::run(args) {
                 eprintln!("orbital-enum: {error}");

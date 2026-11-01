@@ -6,24 +6,31 @@
 //! interaction correction to the sum of the two single-edge deltas.
 
 use super::*;
-use crate::base::{index, rev_index, ZERO};
+use crate::base::{ZERO, index, one_bits, rev_index};
+
+// At most two colours times n! embeddings, even before symmetry division.
+// 2 * 23! fits comfortably in i128. Never narrow before dividing: a highly
+// symmetric pattern can have a huge raw multiplicity and very few copies.
+fn signed(count: u128) -> i128 {
+    i128::try_from(count).expect("copy count exceeds signed delta range")
+}
 
 #[derive(Debug, Default)]
 struct Score {
-    copies: u64,
-    colors: [u64; 2],
-    makes: Vec<u64>,
-    breaks: Vec<u64>,
-    pairs: Vec<i64>,
+    copies: u128,
+    colors: [u128; 2],
+    makes: Vec<u128>,
+    breaks: Vec<u128>,
+    pairs: Vec<i128>,
     witnesses: std::collections::BTreeSet<BitNum>,
 }
 
 impl Score {
-    fn delta(&self, edge: usize) -> i64 {
-        self.breaks[edge] as i64 - self.makes[edge] as i64
+    fn delta(&self, edge: usize) -> i128 {
+        signed(self.breaks[edge]) - signed(self.makes[edge])
     }
 
-    fn pair_delta(&self, a: usize, b: usize) -> i64 {
+    fn pair_delta(&self, a: usize, b: usize) -> i128 {
         self.delta(a) + self.delta(b) + self.pairs[index(a, b)]
     }
 }
@@ -34,7 +41,7 @@ pub(super) struct Counter {
     adjacent: [u32; MAX_SIZE],
     pred: [usize; MAX_SIZE],
     // Each edge-set copy occurs this many times after pattern-twin pruning.
-    multiplicity: u64,
+    multiplicity: u128,
 }
 
 struct Search<'a, const WRONG: u32> {
@@ -53,6 +60,7 @@ struct Search<'a, const WRONG: u32> {
 
 impl Counter {
     pub(super) fn new(pattern: &Graph) -> Self {
+        assert!(pattern.size <= MAX_SIZE);
         let mut adjacent = [0u32; MAX_SIZE];
         for edge in bits(pattern.bits()) {
             let (a, b) = rev_index(edge);
@@ -65,23 +73,26 @@ impl Counter {
             .map(|(_, v)| v)
             .collect();
         let mut pred = [ABSENT; MAX_SIZE];
-        let mut chain_length = [1u64; MAX_SIZE];
-        let mut twin_factor = 1;
+        let mut chain_length = [1u128; MAX_SIZE];
+        let mut twin_factor = 1u128;
         for (i, &v) in order.iter().enumerate() {
             for &u in order[..i].iter().rev() {
                 let other = !((1u32 << u) | (1 << v));
                 if adjacent[v] & other == adjacent[u] & other {
                     pred[v] = u;
                     chain_length[v] = chain_length[u] + 1;
-                    twin_factor *= chain_length[v];
+                    twin_factor = twin_factor
+                        .checked_mul(chain_length[v])
+                        .expect("twin factor overflow");
                     break;
                 }
             }
         }
         let active_automorphisms = crate::tools::count_symmetries(pattern)
             / crate::tools::factorial(pattern.size - order.len());
-        assert_eq!(active_automorphisms % twin_factor as u128, 0);
-        let multiplicity = active_automorphisms as u64 / twin_factor;
+        assert_eq!(active_automorphisms % twin_factor, 0);
+        let multiplicity = active_automorphisms / twin_factor;
+        assert!(multiplicity > 0);
         Self {
             size: pattern.size,
             order,
@@ -174,8 +185,8 @@ impl Counter {
             *value /= self.multiplicity;
         }
         for value in &mut score.pairs {
-            debug_assert_eq!(*value % self.multiplicity as i64, 0);
-            *value /= self.multiplicity as i64;
+            debug_assert_eq!(*value % signed(self.multiplicity), 0);
+            *value /= signed(self.multiplicity);
         }
         Some(score)
     }
@@ -189,7 +200,7 @@ impl Counter {
         timer: Instant,
         deadline: Option<Duration>,
         per_color: usize,
-    ) -> (Vec<BitNum>, Option<u64>) {
+    ) -> (Vec<BitNum>, Option<u128>) {
         assert!(per_color > 0);
         let mut score = Score::default();
         let mut complete = true;
@@ -235,16 +246,22 @@ impl Counter {
 impl<const WRONG: u32> Search<'_, WRONG> {
     // false means interrupted; otherwise this subtree has been fully counted.
     fn go(&mut self, depth: usize, used: u32, edge_set: BitNum, wrong: BitNum) -> bool {
-        self.nodes += 1;
+        self.nodes = self.nodes.wrapping_add(1); // Only a deadline-sampling clock.
         if self.nodes & 4095 == 1 && self.deadline.is_some_and(|d| self.timer.elapsed() >= d) {
             return false;
         }
         if depth == self.counter.order.len() {
             if wrong == 0 {
-                self.score.copies += 1;
+                self.score.copies = self
+                    .score
+                    .copies
+                    .checked_add(1)
+                    .expect("copy count overflow");
                 if WRONG != 0 {
                     for edge in bits(edge_set) {
-                        self.score.makes[edge] += 1;
+                        self.score.makes[edge] = self.score.makes[edge]
+                            .checked_add(1)
+                            .expect("make count overflow");
                     }
                 }
                 if self.score.witnesses.len() < self.witness_limit {
@@ -254,7 +271,8 @@ impl<const WRONG: u32> Search<'_, WRONG> {
                     return false;
                 }
             } else if wrong.count_ones() == 1 {
-                self.score.breaks[wrong.trailing_zeros() as usize] += 1;
+                let value = &mut self.score.breaks[wrong.trailing_zeros() as usize];
+                *value = value.checked_add(1).expect("break count overflow");
             }
             if WRONG == 2 {
                 // A monochromatic copy was subtracted twice by two makes;
@@ -264,21 +282,24 @@ impl<const WRONG: u32> Search<'_, WRONG> {
                 match wrong.count_ones() {
                     0 => {
                         for b in bits(edge_set) {
-                            for a in bits(edge_set & ((1 << b) - 1)) {
-                                self.score.pairs[index(a, b)] += 1;
+                            for a in bits(edge_set & one_bits(b)) {
+                                let value = &mut self.score.pairs[index(a, b)];
+                                *value = value.checked_add(1).expect("pair count overflow");
                             }
                         }
                     }
                     1 => {
                         let a = wrong.trailing_zeros() as usize;
                         for b in bits(edge_set & !wrong) {
-                            self.score.pairs[index(a, b)] -= 1;
+                            let value = &mut self.score.pairs[index(a, b)];
+                            *value = value.checked_sub(1).expect("pair count overflow");
                         }
                     }
                     2 => {
                         let a = wrong.trailing_zeros() as usize;
                         let b = (wrong & (wrong - 1)).trailing_zeros() as usize;
-                        self.score.pairs[index(a, b)] += 1;
+                        let value = &mut self.score.pairs[index(a, b)];
+                        *value = value.checked_add(1).expect("pair count overflow");
                     }
                     _ => unreachable!(),
                 }
@@ -316,14 +337,14 @@ impl<const WRONG: u32> Search<'_, WRONG> {
             while missing_edges != 0 {
                 let u = missing_edges.trailing_zeros() as usize;
                 missing_edges &= missing_edges - 1;
-                next_wrong |= 1 << index(w, u);
+                next_wrong |= bit(index(w, u));
             }
             let mut next_edges = edge_set;
             let mut r = required;
             while r != 0 {
                 let u = r.trailing_zeros() as usize;
                 r &= r - 1;
-                next_edges |= 1 << index(u, w);
+                next_edges |= bit(index(u, w));
             }
             self.images[v] = w;
             let mut neighbours = self.counter.adjacent[v];
@@ -428,11 +449,11 @@ impl Archive {
         }
     }
 
-    fn offer(&mut self, host: Graph, copies: u64, best: u64, flips: u64) {
+    fn offer(&mut self, host: Graph, copies: u128, best: u128, flips: u64) {
         if self.capacity == 0 {
             return;
         }
-        let ceiling = best.saturating_add(self.slack);
+        let ceiling = best.saturating_add(u128::from(self.slack));
         self.entries.retain(|(_, _, c)| c.copies <= ceiling);
         if copies > ceiling {
             return;
@@ -471,11 +492,11 @@ impl Archive {
     }
 }
 
-fn single_choices(score: &Score, tabu: &[u64], flips: u64, best: u64, moves: Moves) -> Vec<usize> {
+fn single_choices(score: &Score, tabu: &[u64], flips: u64, best: u128, moves: Moves) -> Vec<usize> {
     let focused = |v: usize| moves == Moves::All || score.makes[v] != 0;
     let mut choices: Vec<_> = (0..score.makes.len())
         .filter(|&v| {
-            focused(v) && (tabu[v] <= flips || score.copies as i64 + score.delta(v) < best as i64)
+            focused(v) && (tabu[v] <= flips || signed(score.copies) + score.delta(v) < signed(best))
         })
         .collect();
     if choices.is_empty() {
@@ -489,8 +510,8 @@ fn pair_choices(
     host: Graph,
     tabu: &[u64],
     flips: u64,
-    best: u64,
-    single_delta: i64,
+    best: u128,
+    single_delta: i128,
 ) -> Vec<(usize, usize)> {
     let mut choices = Vec::new();
     let mut pair_best = single_delta;
@@ -501,7 +522,8 @@ fn pair_choices(
             if delta >= single_delta || delta > pair_best {
                 continue;
             }
-            if (tabu[a] > flips || tabu[b] > flips) && score.copies as i64 + delta >= best as i64 {
+            if (tabu[a] > flips || tabu[b] > flips) && signed(score.copies) + delta >= signed(best)
+            {
                 continue;
             }
             // In particular, swapping two almost-twin vertex labels can be a
@@ -510,7 +532,7 @@ fn pair_choices(
             // this, so most moves need no canonicalization at all.
             if delta == 0 {
                 let key = *current_key.get_or_insert_with(|| host_key(&host));
-                let next = Graph::from_bits(host.size, host.bits() ^ (1 << a) ^ (1 << b));
+                let next = Graph::from_bits(host.size, host.bits() ^ bit(a) ^ bit(b));
                 if host_key(&next) == key {
                     continue;
                 }
@@ -634,7 +656,8 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
             assert_eq!(paired.copies, score.copies);
             let pairs = pair_choices(&paired, host, &tabu_until, flips, best.unwrap(), min_delta);
             if let Some(&(a, b)) = pairs.choose(rng) {
-                host.edges.0.0 ^= (1 << a) | (1 << b);
+                host.edges.0.toggle(a);
+                host.edges.0.toggle(b);
                 flips += 2;
                 tabu_until[a] = flips.saturating_add(config.tabu as u64);
                 tabu_until[b] = flips.saturating_add(config.tabu as u64);
@@ -649,7 +672,7 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
             choices.retain(|&v| score.delta(v) + extra[v] == min_delta);
         }
         let edge = *choices.choose(rng).unwrap();
-        host.edges.0.0 ^= 1 << edge;
+        host.edges.0.toggle(edge);
         flips += 1;
         tabu_until[edge] = flips.saturating_add(config.tabu as u64);
         diagnostics.outside_moves += u64::from(score.makes[edge] == 0);
@@ -674,9 +697,84 @@ pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut Std
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::ONE;
 
-    fn brute(pattern: Graph, host: Graph) -> u64 {
+    #[cfg(feature = "u256")]
+    #[test]
+    fn wide_p3_counts_and_high_edge_pair_deltas_match_degrees() {
+        // Independent formula, no embedding enumerator: each monochromatic
+        // P3 has a unique centre and an unordered pair of same-colour neighbours.
+        fn p3(host: Graph) -> u128 {
+            (0..host.size)
+                .map(|v| {
+                    let d = host.degree_of(v);
+                    u128::try_from(Graph::triangle(d) + Graph::triangle(host.size - 1 - d)).unwrap()
+                })
+                .sum()
+        }
+        let mut rng = StdRng::seed_from_u64(170023);
+        for n in [17, 23] {
+            let pattern = Graph::from_u64(n, 3);
+            let counter = Counter::new(&pattern);
+            let top = Graph::triangle(n) - 1;
+            for host in [Graph::from_bits(n, ZERO), random_graph(&mut rng, n)] {
+                let score = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
+                assert_eq!(score.copies, p3(host));
+                for a in [0, 127, 128, top] {
+                    let next = Graph::from_bits(n, host.bits() ^ bit(a));
+                    assert_eq!(signed(score.copies) + score.delta(a), signed(p3(next)));
+                    for b in [0, 128, top] {
+                        if a == b {
+                            continue;
+                        }
+                        let next = Graph::from_bits(n, next.bits() ^ bit(b));
+                        assert_eq!(
+                            signed(score.copies) + score.pair_delta(a, b),
+                            signed(p3(next))
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "u256")]
+    #[test]
+    fn factorials_above_u64_are_divided_without_truncation() {
+        for n in [21, 23] {
+            assert!(crate::tools::factorial(n) > u128::from(u64::MAX));
+            for pattern in [
+                Graph::from_fn(n, |_, _| true),
+                Graph::from_fn(n, |u, _| u == 0),
+            ] {
+                let counter = Counter::new(&pattern);
+                assert_eq!(counter.multiplicity, 1);
+                // Constructor used to overflow even before counting began.
+                // Do not enumerate K23 here: twin pruning still explores many
+                // dead partial injections, unrelated to this arithmetic test.
+            }
+        }
+    }
+
+    #[test]
+    fn count_deltas_do_not_narrow_to_64_bits() {
+        let large = 1u128 << 80;
+        let score = Score {
+            copies: large,
+            makes: vec![large, 0],
+            breaks: vec![0, large + 3],
+            pairs: vec![-signed(large)],
+            ..Score::default()
+        };
+        assert_eq!(score.delta(0), -signed(large));
+        assert_eq!(score.delta(1), signed(large) + 3);
+        assert_eq!(score.pair_delta(0, 1), 3 - signed(large));
+        assert_eq!(
+            single_choices(&score, &[10, 10], 0, large, Moves::All),
+            vec![0]
+        );
+    }
+
+    fn brute(pattern: Graph, host: Graph) -> u128 {
         let mut copies = HashSet::new();
         for p in crate::perm::all_perms(pattern.size) {
             let copy = pattern.renumber(&p);
@@ -684,7 +782,7 @@ mod tests {
                 copies.insert(copy.bits());
             }
         }
-        copies.len() as u64
+        u128::try_from(copies.len()).unwrap()
     }
 
     #[test]
@@ -704,7 +802,7 @@ mod tests {
                 .unwrap();
             assert_eq!(score.copies, only.copies);
             assert_eq!(score.colors, only.colors);
-            assert_eq!(score.copies, score.colors.iter().sum());
+            assert_eq!(score.copies, score.colors.iter().sum::<u128>());
             assert_eq!(score.copies, witnessed.copies);
             assert!(witnessed.witnesses.len() <= 6);
             let possible: HashSet<_> = crate::perm::all_perms(5)
@@ -724,16 +822,16 @@ mod tests {
             assert_eq!(score.makes, paired.makes);
             assert_eq!(score.breaks, paired.breaks);
             for v in 0..10 {
-                let next = Graph::from_bits(5, host.bits() ^ (1 << v));
+                let next = Graph::from_bits(5, host.bits() ^ bit(v));
                 assert_eq!(
-                    score.copies as i64 + score.breaks[v] as i64 - score.makes[v] as i64,
-                    brute(pattern, next) as i64
+                    signed(score.copies) + score.delta(v),
+                    signed(brute(pattern, next))
                 );
                 for u in 0..v {
-                    let next = Graph::from_bits(5, host.bits() ^ (1 << v) ^ (1 << u));
+                    let next = Graph::from_bits(5, host.bits() ^ bit(v) ^ bit(u));
                     assert_eq!(
-                        score.copies as i64 + paired.pair_delta(u, v),
-                        brute(pattern, next) as i64,
+                        signed(score.copies) + paired.pair_delta(u, v),
+                        signed(brute(pattern, next)),
                         "pattern={}, host={}, pair=({u},{v})",
                         pattern.bits(),
                         host.bits()
@@ -831,7 +929,7 @@ mod tests {
             let score = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
             let choices = pair_choices(&score, host, &[0; 10], 0, score.copies, 100);
             for (a, b) in choices {
-                let next = Graph::from_bits(5, h ^ (ONE << a) ^ (ONE << b));
+                let next = Graph::from_bits(5, host.bits() ^ bit(a) ^ bit(b));
                 assert_ne!(host_key(&host), host_key(&next));
             }
         }
@@ -850,10 +948,10 @@ mod tests {
                 let score = counter.evaluate::<2>(host, Instant::now(), None).unwrap();
                 for b in 1..6 {
                     for a in 0..b {
-                        let next = Graph::from_bits(4, h ^ (ONE << a) ^ (ONE << b));
+                        let next = Graph::from_bits(4, host.bits() ^ bit(a) ^ bit(b));
                         assert_eq!(
-                            score.copies as i64 + score.pair_delta(a, b),
-                            brute(pattern, next) as i64
+                            signed(score.copies) + score.pair_delta(a, b),
+                            signed(brute(pattern, next))
                         );
                     }
                 }
@@ -865,7 +963,14 @@ mod tests {
     #[test]
     fn frontier_minima_have_cheaper_genuine_pair_escapes() {
         for (f, h, q, focused, all, paired) in [
-            (208095050752u128, 149391117928587412994558940u128, 2, 10, 8, 3),
+            (
+                208095050752u128,
+                149391117928587412994558940u128,
+                2,
+                10,
+                8,
+                3,
+            ),
             (35391346720704, 1735057707038897413644043761, 5, 19, 14, 9),
             (35391346720704, 240446773475227354961364772, 5, 9, 9, 6),
         ] {
@@ -878,16 +983,16 @@ mod tests {
             for (scope, expected) in [(Moves::Focused, focused), (Moves::All, all)] {
                 let choices = single_choices(&score, &[0; 91], 0, q, scope);
                 assert_eq!(
-                    q as i64 + choices.iter().map(|&e| score.delta(e)).min().unwrap(),
+                    signed(q) + choices.iter().map(|&e| score.delta(e)).min().unwrap(),
                     expected
                 );
             }
-            let pairs = pair_choices(&score, host, &[0; 91], 0, q, all - q as i64);
+            let pairs = pair_choices(&score, host, &[0; 91], 0, q, all - signed(q));
             assert!(!pairs.is_empty());
             assert!(
                 pairs
                     .iter()
-                    .all(|&(a, b)| q as i64 + score.pair_delta(a, b) == paired)
+                    .all(|&(a, b)| signed(q) + score.pair_delta(a, b) == paired)
             );
         }
     }

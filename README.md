@@ -51,6 +51,67 @@ canonical-key fallback and needs no C toolchain; this is also the current
 option for cross-compilation or non-POSIX targets. The existing `u64`
 feature can be combined with either backend.
 
+### Integer widths and separate executables
+
+The default packed graph type is `u128` (up to 16 vertices). Feature `u64`
+supports 11 vertices; feature `u256` uses `ethnum::U256` and supports 23.
+`u64` and `u256` are mutually exclusive. Copy counts and symmetry factors
+use checked `u128` arithmetic in **all** builds, with `i128` move deltas;
+even the pre-symmetry counts fit at these orders. Packed edge/SAT masks
+must use `base::bit(index)`, `one_bits(count)`, or `BitVec` operations, not
+an inferred `1 << index`: U256's mixed primitive operators can silently
+perform the latter shift or complement in only 128 bits. Bounds checks
+on the bit API remain active in release builds. Vertex sets remain `u32`.
+
+Build both executables without clobbering either:
+
+```sh
+cargo build --release --bin graphy --features sat,native
+cargo build --release --bin graphy-u256 --features u256,sat,native
+target/release/graphy capabilities
+target/release/graphy-u256 capabilities
+```
+
+Omit `sat` if unneeded (SAT builds additionally require C++ and libclang;
+see the SAT section below). `native` is optional too. The wide target is a
+thin source wrapper, not a shell script, and has no runtime dispatch cost.
+Cargo features are still **package-wide**: using `--features u256` without
+`--bin graphy-u256` can also build a wide executable named `graphy`. Likewise,
+explicitly naming `graphy` does not disable a feature. Use the commands
+above and check `capabilities` when in doubt; `cargo run` defaults to `graphy`.
+`cargo test --all-features` deliberately fails because it selects both widths.
+
+`capabilities` prints a single JSON object with schema `graphy-capabilities-v1`,
+`bit_width`, `max_order`, `max_edges`, `copy_count_bits`, backend booleans, and
+the enumeration worker's variable cap. Campaign launchers query the selected
+binary before scheduling work, so for n=17..23 use, for example:
+
+```sh
+python3 scripts/orbital_sat.py --binary target/release/graphy-u256 --order 17 \
+    --candidate 63 --template cycle:17 --ledger output/orbital17-control.sqlite \
+    --seconds 10 --batch 10000
+```
+
+This is a quick positive control (K4 versus Paley17), not a new refutation.
+The same `--binary` option works with repair, vertex-SAT, seed preparation,
+and enumeration launchers. `GRAPHY_BINARY` overrides their default, including
+the Python integration tests. Width support is not a promise of feasible
+runtime at the largest order. Python masks and graph columns in the ledgers
+already support arbitrary-size integers; orbital variable limits are no
+longer hard-coded to 120. Capability metadata is saved with new SAT campaigns.
+
+Existing n<=16 SAT ledgers can be reused; vertex-core keys are revalidated
+when the binary changes. Read-only status/export needs no binary. Exhaustive
+enumeration ledgers deliberately pin their binary hash: keep that executable
+and use `--legacy-binary` if it predates `capabilities`, rather than changing
+its recorded hash. This escape hatch is **only** for the n=8/16 enumeration
+worker, not SAT or repair. Do not trust n>=17 repair/counting/SAT exclusions
+produced by the pre-fix wide implementation; rerun them with the corrected
+binary. The old backup is useful for comparison, not as a correctness oracle
+for those methods.
+
+### Canonical keys and successors
+
 `successors` normalizes every input graph into an exact native key, so its
 input may use graphy's minimum-decimal labels, arbitrary decimal labels,
 or graph6 from `geng`/`labelg`. It stops checking an extension at its first

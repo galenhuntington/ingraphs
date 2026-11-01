@@ -182,8 +182,18 @@ class EnumerationCliTests(unittest.TestCase):
             try:
                 until=time.monotonic()+10
                 while not children and process.poll() is None and time.monotonic()<until:
-                    for entry in Path(f"/proc/{process.pid}/task").glob("*/children"):
-                        children.update(map(int,entry.read_text().split()))
+                    # The capability probe is also a short-lived child, before
+                    # any ledger exists. Wait for an actual running campaign.
+                    running = False
+                    if path.exists():
+                        with sqlite3.connect(path) as db:
+                            try:
+                                running = db.execute("SELECT count(*) FROM campaigns WHERE state='running'").fetchone()[0] > 0
+                            except sqlite3.OperationalError:
+                                pass
+                    if running:
+                        for entry in Path(f"/proc/{process.pid}/task").glob("*/children"):
+                            children.update(map(int,entry.read_text().split()))
                     time.sleep(0.01)
                 self.assertTrue(children)
                 process.terminate()

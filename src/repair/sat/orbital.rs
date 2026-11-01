@@ -3,8 +3,8 @@
 //! witnesses are projected by SET UNION (not parity) to NAE constraints.
 //! Family UNSAT is not universality, nor a separately checked UNSAT proof.
 
-use crate::base::{ONE, one_bits};
 use super::*;
+use crate::base::one_bits;
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
@@ -64,11 +64,11 @@ impl Partition {
     }
 
     fn project(&self, copy: BitNum) -> BitNum {
-        bits(copy).fold(ZERO, |mask, e| mask | (ONE << self.edge_variable[e]))
+        bits(copy).fold(ZERO, |mask, e| mask | bit(self.edge_variable[e]))
     }
 
     fn decode(&self, assignment: BitNum) -> BitNum {
-        assert_eq!(assignment >> self.cells.len(), 0);
+        assert_eq!(assignment & !one_bits(self.cells.len()), 0);
         bits(assignment).fold(ZERO, |host, v| host | self.cells[v])
     }
 
@@ -85,7 +85,7 @@ impl Partition {
 struct Outcome {
     status: &'static str,
     last: Graph,
-    last_copies: Option<u64>,
+    last_copies: Option<u128>,
     rounds: usize,
     checks: usize,
     witnesses: usize,
@@ -107,8 +107,8 @@ fn search(
     let counter = Counter::new(pattern);
     let mut engine = Engine::new(partition.cells.len(), seed, factor);
     let mut rng = StdRng::seed_from_u64(seed);
-    let phases =
-        (0..partition.cells.len()).fold(ZERO, |m, i| if rng.gen_bool(0.5) { m | (ONE << i) } else { m });
+    let phases = (0..partition.cells.len())
+        .fold(ZERO, |m, i| if rng.gen_bool(0.5) { m | bit(i) } else { m });
     engine.phases(phases);
     let free = one_bits(partition.cells.len());
     let mut full_witnesses = Vec::new(); // One auditable graph witness per projected constraint.
@@ -309,10 +309,54 @@ pub fn run(args: Args) {
 mod tests {
     use super::*;
 
-    #[cfg(not(feature = "u256"))]
-    fn v(a: Vec<BitNum>) -> Vec<BitNum> { a }
     #[cfg(feature = "u256")]
-    fn v(a: Vec<u64>) -> Vec<BitNum> { a.into_iter().map(|x| BitNum::from(x)).collect() }
+    #[test]
+    fn paley17_k4_is_not_falsely_unsat_with_full_witness_batches() {
+        let squares: HashSet<_> = (1..17).map(|i| i * i % 17).collect();
+        let paley = Graph::from_fn(17, |u, v| squares.contains(&((v + 17 - u) % 17)));
+        let pattern = Graph::from_u64(17, 63); // K4 and thirteen isolates.
+        // Check the mathematical positive control independently of Counter.
+        validate_refuter(&pattern, &paley);
+        let partition = Partition::new(17, vec![paley.bits(), paley.complement().bits()]);
+        let config = Config {
+            seconds: 0.0,
+            rounds: 10,
+            batch: 10000,
+            max_constraints: 10000,
+            conflicts: 0,
+        };
+        let mut exercised_clauses = false;
+        for seed in 0..8 {
+            let (out, engine, witnesses) = search(&pattern, &partition, &config, seed, false);
+            assert_eq!(out.status, "refuted", "seed={seed}");
+            assert_eq!(out.last_copies, Some(0));
+            validate_refuter(&pattern, &out.last);
+            exercised_clauses |= !engine.masks.is_empty();
+            for (&mask, &copy) in engine.masks.iter().zip(&witnesses) {
+                assert_eq!(copy.count_ones(), 6);
+                assert_eq!(mask.count_ones(), 2); // Every K4 meets both Paley colours.
+            }
+        }
+        assert!(exercised_clauses);
+    }
+
+    #[test]
+    fn singleton_partition_reaches_the_highest_sat_variable() {
+        let edges = Graph::triangle(MAX_SIZE);
+        let partition = Partition::new(MAX_SIZE, (0..edges).map(bit).collect());
+        let mask = bit(0) | bit(edges - 1);
+        assert_eq!(partition.project(mask), mask);
+        assert_eq!(partition.decode(mask), mask);
+    }
+
+    #[cfg(not(feature = "u256"))]
+    fn v(a: Vec<BitNum>) -> Vec<BitNum> {
+        a
+    }
+    #[cfg(feature = "u256")]
+    fn v(a: Vec<u64>) -> Vec<BitNum> {
+        a.into_iter().map(|x| BitNum::from(x)).collect()
+    }
 
     #[test]
     fn projection_is_union_and_preserves_monochromaticity() {
@@ -343,8 +387,11 @@ mod tests {
             let p = Partition::new(4, cells);
             for f in 0..64 {
                 let pattern = Graph::from_u64(4, f);
-                let possible = (0..1u128 << p.cells.len()).any(|m| {
-                    super::super::tests::naive_refutes(&pattern, Graph::from_bits(4, p.decode(m.into())))
+                let possible = (0..1u32 << p.cells.len()).any(|m| {
+                    super::super::tests::naive_refutes(
+                        &pattern,
+                        Graph::from_bits(4, p.decode(m.into())),
+                    )
                 });
                 let (out, engine, witnesses) = search(&pattern, &p, &config, 17, false);
                 assert_eq!(out.status == "refuted", possible, "F={f}, partition={p:?}");

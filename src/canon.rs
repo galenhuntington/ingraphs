@@ -2,7 +2,7 @@
 //! least-decimal representation in `enumerate`. These keys are not persistent
 //! identifiers: backend/version/options may change their labeling.
 
-use crate::base::{BitNum, Bits, Graph, MAX_SIZE, ZERO, ONE};
+use crate::base::{BitNum, Bits, Graph, MAX_SIZE, ZERO, bit};
 use std::collections::BTreeSet;
 
 /// An exact packed canonical graph, NOT a hash. Only compare keys for the
@@ -67,7 +67,7 @@ fn canonical_bits(gr: &Graph) -> BitNum {
 #[cfg(not(feature = "nauty"))]
 fn canonical_bits(gr: &Graph) -> BitNum {
     if gr.size == 0 {
-        return 0;
+        return ZERO;
     }
     crate::enumerate::to_best(gr).bits()
 }
@@ -77,9 +77,9 @@ fn canonical_bits(gr: &Graph) -> BitNum {
 pub fn bump(gr: &Graph, extend: bool) -> BTreeSet<Key> {
     let mut keys = BTreeSet::new();
     for b in 0..Graph::triangle(gr.size) {
-        let bit = ONE << b;
-        if (gr.bits() & bit == 0) == extend {
-            keys.insert(key(&Graph::from_bits(gr.size, gr.bits() ^ bit)));
+        let mask = bit(b);
+        if (gr.bits() & mask == 0) == extend {
+            keys.insert(key(&Graph::from_bits(gr.size, gr.bits() ^ mask)));
         }
     }
     keys
@@ -92,9 +92,9 @@ pub fn bump_representatives(gr: &Graph, extend: bool) -> Vec<Graph> {
     let mut keys = BTreeSet::new();
     let mut representatives = Vec::new();
     for b in 0..Graph::triangle(gr.size) {
-        let bit = ONE << b;
-        if (gr.bits() & bit == 0) == extend {
-            let next = Graph::from_bits(gr.size, gr.bits() ^ bit);
+        let mask = bit(b);
+        if (gr.bits() & mask == 0) == extend {
+            let next = Graph::from_bits(gr.size, gr.bits() ^ mask);
             if keys.insert(key(&next)) { representatives.push(next); }
         }
     }
@@ -107,6 +107,25 @@ mod tests {
     use crate::{base::random_graph, enumerate, perm::Perm};
     use rand::{SeedableRng, rngs::StdRng};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn zero_order_key_is_zero() {
+        assert_eq!(key(&Graph::from_bits(0, ZERO)).graph(0).bits(), ZERO);
+    }
+
+    #[cfg(feature = "u256")]
+    #[test]
+    fn wide_retractions_preserve_the_other_word() {
+        // Two disjoint edges: deleting either must leave exactly one edge,
+        // never the empty graph (mixed u128/U256 complement used to do that).
+        let graph = Graph::from_bits(17, bit(0) | bit(128));
+        let expected = std::collections::BTreeSet::from([bit(0)]);
+        assert_eq!(crate::tools::bump(&graph, false), expected);
+        let keys = bump(&graph, false);
+        assert_eq!(keys.len(), 1);
+        assert!(keys.iter().all(|k| k.graph(17).edge_count() == 1));
+        assert!(bump_representatives(&graph, false).iter().all(|g| g.edge_count() == 1));
+    }
 
     #[test]
     fn exhaustive_six_vertex_partition_matches_legacy() {

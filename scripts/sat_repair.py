@@ -8,6 +8,7 @@ is not a universality certificate. See README for ledger-mode budget semantics.
 """
 
 import argparse
+from graphy_binary import require, check_orders
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import math
@@ -78,6 +79,11 @@ def main():
     parser.add_argument("--chunk-size", type=int, default=8, help="ledger: at most this many regions per worker process")
     parser.add_argument("--plan", action="store_true", help="register seed catalogue and print eligible work without running SAT")
     args = parser.parse_args()
+    if not (args.status and not args.import_csv):
+        try:
+            args.capabilities = require(args.binary, args.orders or (), sat=True)
+        except ValueError as error:
+            parser.error(str(error))
     if args.block_mode is None:
         args.block_mode = "vertex" if args.ledger else "directed"
     if args.reset_every is None:
@@ -91,7 +97,8 @@ def main():
             parser.error("ledger supports fixed-size vertex catalogues, without free-edges or max-vertices")
         if args.restarts != 1 or args.restart_offset != 0:
             parser.error("ledger schedules each region once; use --work retry in a later campaign, not restarts")
-        if not 1 <= args.vertices <= 32 or (args.orders and min(args.orders) < args.vertices):
+        maximum = args.capabilities["max_order"] if hasattr(args, "capabilities") else 32
+        if not 1 <= args.vertices <= maximum or (args.orders and min(args.orders) < args.vertices):
             parser.error("vertices must be positive and at most every selected order")
     elif args.import_csv or args.import_only or args.status or args.plan or args.orders or args.work != "new":
         parser.error("bookkeeping options require --ledger")
@@ -110,12 +117,14 @@ def main():
         candidates = survivors if candidates is None else candidates & survivors
     args.selected_candidates = candidates
     groups = select_seeds(args.results, args.keep, args.max_score, binary=args.binary,
-                          candidates=candidates,
+                          candidates=candidates, orders=args.orders,
                           report=lambda key, raw, classes, chosen: print(
                               f"SAT seeds n={key[0]} F={key[1]}: {chosen}/{classes} classes",
                               file=sys.stderr, flush=True)) if args.results and not (args.import_only or args.status) else {}
     if args.orders:
         groups = {key: seeds for key, seeds in groups.items() if key[0] in args.orders}
+    if groups:
+        check_orders(args.capabilities, {n for n, _ in groups})
     if not groups and (args.results or not args.ledger) and not (args.import_only or args.status):
         parser.error("no eligible candidate-specific seeds")
     if args.free_edges is not None and any(not 0 <= args.free_edges < (1 << (n * (n - 1) // 2)) for n, _ in groups):

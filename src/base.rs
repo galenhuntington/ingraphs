@@ -7,18 +7,20 @@ use std::fmt;
 
 type Pair = (usize, usize);
 
-#[cfg(feature = "u64")]
+#[cfg(all(feature = "u64", feature = "u256"))]
+compile_error!("features `u64` and `u256` are mutually exclusive; build each binary separately");
+
+#[cfg(all(feature = "u64", not(feature = "u256")))]
 pub const MAX_SIZE: usize = 11;
 #[cfg(not(any(feature = "u64", feature = "u256")))]
 pub const MAX_SIZE: usize = 16;
 #[cfg(feature = "u256")]
 pub const MAX_SIZE: usize = 23;
 
-// XXX BitNum was meant to provide access to the raw number.
-// But not necessarily a real number anymore, so perhaps drop,
-// or at least don't export, or at least avoid using?
-
-#[cfg(feature = "u64")]
+// Packed edge sets (and SAT-variable sets), not vertex masks. Construct masks
+// with bit()/one_bits()/BitVec, never with an inferred integer `1 << index`:
+// U256's mixed primitive operators would perform that shift in u128 first.
+#[cfg(all(feature = "u64", not(feature = "u256")))]
 pub type BitNum = u64;
 #[cfg(not(any(feature = "u64", feature = "u256")))]
 pub type BitNum = u128;
@@ -36,7 +38,10 @@ pub const ONE: BitNum = 1;
 pub const ONE: BitNum = BitNum::ONE;
 
 #[inline]
-pub fn one_bits(ct: usize) -> BitNum { (ONE << ct) - 1 }
+pub const fn bit(index: usize) -> BitNum { BitVec::bit(index) }
+
+#[inline]
+pub fn one_bits(count: usize) -> BitNum { BitVec::low_mask(count) }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Ord, PartialOrd)]
 pub struct BitVec (pub BitNum);
@@ -44,7 +49,6 @@ pub struct BitVec (pub BitNum);
 pub trait Bits {
     fn bits(&self) -> BitNum;
     fn from_bits(size: usize, bits: BitNum) -> Self;
-    // XXX maybe should be from_u128.. mostly used in tests
     fn from_u64(size: usize, bits: u64) -> Self where Self: Sized { Self::from_bits(size, BitNum::from(bits)) }
     fn show_bits(&self) -> String {
         let mut b = 1;
@@ -69,16 +73,39 @@ impl Bits for BitNum {
 }
 
 impl BitVec {
-    // XXX doesn't need to be a function?  const EMPTY ??
     #[inline] pub const fn new() -> Self { BitVec(ZERO) }
+
+    /// One packed bit, checked even in optimized builds. Vertex masks use u32
+    /// separately; this API is for the build's full edge/SAT-variable width.
+    #[inline]
+    pub const fn bit(index: usize) -> BitNum {
+        assert!(index < BitNum::BITS as usize, "packed bit index out of range");
+        #[cfg(not(feature = "u256"))]
+        { ONE << index }
+        #[cfg(feature = "u256")]
+        {
+            if index < 128 { BitNum::from_words(0, 1u128 << index) }
+            else { BitNum::from_words(1u128 << (index - 128), 0) }
+        }
+    }
+
+    /// The low `count` bits, including the empty and full-width masks.
+    #[inline]
+    pub fn low_mask(count: usize) -> BitNum {
+        assert!(count <= BitNum::BITS as usize, "packed mask width out of range");
+        if count == BitNum::BITS as usize { !ZERO }
+        else { bit(count) - ONE }
+    }
+
+    #[inline]
+    pub fn toggle(&mut self, index: usize) { self.0 ^= bit(index); }
 }
 
-// XXX maybe add bit(usize) function? then maybe don't need BitVec <<
 #[cfg(not(feature = "u256"))]
 impl BitVec {
-    #[inline] pub const fn get(&self, i: usize) -> bool { self.0 & (1 << i) != 0 }
-    #[inline] pub const fn set(&mut self, i: usize) { self.0 |= 1 << i }
-    #[inline] pub const fn unset(&mut self, i: usize) { self.0 &= !(1 << i) }
+    #[inline] pub const fn get(&self, i: usize) -> bool { self.0 & bit(i) != ZERO }
+    #[inline] pub const fn set(&mut self, i: usize) { self.0 |= bit(i) }
+    #[inline] pub const fn unset(&mut self, i: usize) { self.0 &= !bit(i) }
 }
 
 // Own implementations needed so these are const, for EDGE_VECS.
@@ -86,20 +113,22 @@ impl BitVec {
 impl BitVec {
     #[inline]
     pub const fn get(&self, i: usize) -> bool {
+        assert!(i < BitNum::BITS as usize, "packed bit index out of range");
         let (hi, lo) = self.0.into_words();
-        if i < 128 { lo & (1 << i) != 0 } else { hi & (1 << (i - 128)) != 0 }
+        if i < 128 { lo & (1u128 << i) != 0 } else { hi & (1u128 << (i - 128)) != 0 }
     }
     #[inline]
     pub const fn set(&mut self, i: usize) {
+        assert!(i < BitNum::BITS as usize, "packed bit index out of range");
         let (mut hi, mut lo) = self.0.into_words();
-        // TODO only edit one
-        if i < 128 { lo |= 1 << i } else { hi |= 1 << (i - 128) }
+        if i < 128 { lo |= 1u128 << i } else { hi |= 1u128 << (i - 128) }
         self.0 = BitNum::from_words(hi, lo);
     }
     #[inline]
     pub const fn unset(&mut self, i: usize) {
+        assert!(i < BitNum::BITS as usize, "packed bit index out of range");
         let (mut hi, mut lo) = self.0.into_words();
-        if i < 128 { lo &= !(1 << i) } else { hi &= !(1 << (i - 128)) }
+        if i < 128 { lo &= !(1u128 << i) } else { hi &= !(1u128 << (i - 128)) }
         self.0 = BitNum::from_words(hi, lo);
     }
 }
@@ -242,7 +271,7 @@ impl Bits for Graph {
 
 pub fn random_graph(rng: &mut impl rand::Rng, size: usize) -> Graph {
     #[cfg(not(feature = "u256"))]
-    let bits = rng.gen_range(0..(1 << Graph::triangle(size)));
+    let bits = rng.gen_range(ZERO..bit(Graph::triangle(size)));
     #[cfg(feature = "u256")]
     let bits = {
         let value = BitNum::from_words(rng.r#gen(), rng.r#gen());
@@ -256,6 +285,42 @@ pub fn random_graph(rng: &mut impl rand::Rng, size: usize) -> Graph {
 mod tests {
     use super::*;
     use crate::testers::*;
+
+    #[test]
+    fn packed_bits_cover_both_words_and_full_width_masks() {
+        let width = BitNum::BITS as usize;
+        let mut value = BitVec(ZERO);
+        assert_eq!(one_bits(0), ZERO);
+        assert_eq!(one_bits(width), !ZERO);
+        for i in 0..width {
+            assert_eq!(bit(i).count_ones(), 1);
+            assert_eq!(bit(i).trailing_zeros() as usize, i);
+            assert_eq!(one_bits(i).count_ones() as usize, i);
+            value.set(i);
+            assert!(value.get(i));
+            assert_eq!(value.0, one_bits(i + 1));
+        }
+        for i in 0..width {
+            value.unset(i);
+            assert_eq!(value.0, !ZERO ^ one_bits(i + 1));
+            value.toggle(i);
+            assert!(value.get(i));
+            value.toggle(i);
+            assert!(!value.get(i));
+        }
+        assert_eq!(value.0, ZERO);
+    }
+
+    #[test]
+    fn packed_bit_bounds_are_checked_in_release_too() {
+        let width = BitNum::BITS as usize;
+        assert!(std::panic::catch_unwind(|| bit(width)).is_err());
+        assert!(std::panic::catch_unwind(|| one_bits(width + 1)).is_err());
+        assert!(std::panic::catch_unwind(|| BitVec(ZERO).get(width)).is_err());
+        assert!(std::panic::catch_unwind(|| BitVec(ZERO).set(width)).is_err());
+        assert!(std::panic::catch_unwind(|| BitVec(!ZERO).unset(width)).is_err());
+        assert!(std::panic::catch_unwind(|| BitVec(ZERO).toggle(width)).is_err());
+    }
     /*
     #[test]
     fn test_fn() {
@@ -312,4 +377,3 @@ mod tests {
         }
     }
 }
-

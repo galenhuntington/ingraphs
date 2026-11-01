@@ -52,9 +52,9 @@ impl Search<'_> {
         let mut choices: Vec<_> = bits(copy.bits() & !changed).collect();
         choices.shuffle(self.rng);
         for edge in choices {
-            let bit = 1 << edge;
-            let next = Graph::from_bits(host.size, host.bits() ^ bit);
-            if let Some(hit) = self.go(next, changed | bit, depth - 1)? {
+            let mask = bit(edge);
+            let next = Graph::from_bits(host.size, host.bits() ^ mask);
+            if let Some(hit) = self.go(next, changed | mask, depth - 1)? {
                 return Ok(Some(hit));
             }
         }

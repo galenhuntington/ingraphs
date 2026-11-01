@@ -6,7 +6,7 @@
 //! Hosts are NEVER canonicalized during a walk: constraints fix edge labels.
 //! A satisfied learned bank is only permission to call the full oracle again.
 
-use crate::base::{BitNum, Bits, Graph, MAX_SIZE, random_graph, ZERO};
+use crate::base::{BitNum, Bits, Graph, MAX_SIZE, ZERO, bit, random_graph};
 use crate::perm::Perm;
 use crate::tools::{build_sorted_row, find_subgraph_ss, read_graphs};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -58,7 +58,7 @@ pub enum Moves {
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     pub host: Graph,
-    pub copies: u64,
+    pub copies: u128,
     pub flips: u64,
 }
 
@@ -240,7 +240,7 @@ pub struct Outcome {
     pub elapsed: Duration,
     pub oracle_time: Duration,
     /// Exact score at the saved host (counted method, or zero for a found refuter).
-    pub best_copies: Option<u64>,
+    pub best_copies: Option<u128>,
     pub diagnostics: Diagnostics,
 }
 
@@ -353,14 +353,14 @@ impl Bank {
     }
 
     fn flip(&mut self, edge: usize) {
-        let was_red = self.host & (1 << edge) != 0;
+        let was_red = self.host & bit(edge) != 0;
         // Remove the old contributions before changing the assignment.
         for &id in &self.occurrences[edge] {
             for v in bits(self.critical(self.masks[id], self.red[id])) {
                 self.breaks[v] -= 1;
             }
         }
-        self.host ^= 1 << edge;
+        self.host ^= bit(edge);
         for i in 0..self.occurrences[edge].len() {
             let id = self.occurrences[edge][i];
             let was_bad = self.is_bad(self.red[id]);
@@ -384,7 +384,9 @@ impl Bank {
 
     fn choose(&self, rng: &mut StdRng, noise: f64) -> usize {
         let mask = self.masks[*self.bad.choose(rng).unwrap()];
-        let score = |v: usize| self.breaks[v] as i64 - self.makes[v] as i64;
+        let score = |v: usize| {
+            i128::try_from(self.breaks[v]).unwrap() - i128::try_from(self.makes[v]).unwrap()
+        };
         let best = bits(mask).map(score).min().unwrap();
         // Focused min-conflicts, with random steps at local minima/plateaux.
         let random = best >= 0 && rng.gen_bool(noise);
@@ -529,7 +531,7 @@ pub fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) ->
 // Stable independent streams, insensitive to scheduling and candidate ordering.
 fn stream_seed(seed: u64, candidate: BitNum, restart: usize) -> u64 {
     #[cfg(not(feature = "u256"))]
-    let wide = candidate as u128;
+    let wide = u128::from(candidate);
     #[cfg(feature = "u256")]
     let wide = (candidate ^ (candidate >> 128u32)).as_u128();
     let mut x = seed ^ wide as u64 ^ (wide >> 64) as u64;
@@ -655,7 +657,7 @@ pub fn run(args: Args) {
                     let mut edges: Vec<usize> = (0..Graph::triangle(args.size)).collect();
                     edges.shuffle(&mut rng);
                     for &edge in &edges[..args.perturb] {
-                        start.edges.0.0 ^= 1 << edge;
+                        start.edges.0.toggle(edge);
                     }
                     let outcome = walk(pattern, start, &config, &mut rng);
                     let refuter = if outcome.status == "refuted" {
@@ -728,7 +730,6 @@ pub fn run(args: Args) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::ONE;
 
     #[test]
     fn every_method_has_repeatable_step_limited_traces() {
@@ -780,7 +781,7 @@ mod tests {
                 bad.push(id);
             }
             for (v, count) in breaks.iter_mut().enumerate() {
-                let red1 = (mask & (bank.host ^ (1 << v))).count_ones();
+                let red1 = (mask & (bank.host ^ bit(v))).count_ones();
                 if !bank.is_bad(red) && bank.is_bad(red1) {
                     *count += 1;
                 }
@@ -810,12 +811,25 @@ mod tests {
             let mut edges: Vec<_> = (0..10).collect();
             for _ in 0..400 {
                 edges.shuffle(&mut rng);
-                let mask = edges[..arity].iter().fold(ZERO, |acc, &v| acc | (ONE << v));
+                let mask = edges[..arity].iter().fold(ZERO, |acc, &v| acc | bit(v));
                 bank.add(mask);
                 assert!(!bank.add(mask));
                 bank.flip(rng.gen_range(0..10));
                 check_bank(&bank);
             }
+        }
+    }
+
+    #[test]
+    fn incremental_bank_handles_the_highest_edges() {
+        let edges = Graph::triangle(MAX_SIZE);
+        let mut bank = Bank::new(Graph::from_bits(MAX_SIZE, bit(edges - 1)), 2);
+        for edge in 0..edges - 1 {
+            bank.add(bit(edge) | bit(edges - 1));
+        }
+        for edge in (0..edges).rev() {
+            bank.flip(edge);
+            check_bank(&bank);
         }
     }
 

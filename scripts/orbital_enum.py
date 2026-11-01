@@ -7,6 +7,7 @@ batches and candidate cursors survive interruption. See research/2026-10-27.md.
 """
 
 import argparse
+from graphy_binary import require
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import csv
@@ -341,6 +342,7 @@ def main():
     parser.add_argument("--candidate", action="append", type=int, default=[])
     parser.add_argument("--candidates", help="decimal first-column file; UNION with --candidate; saved candidates remain registered")
     parser.add_argument("--binary", default=BINARY)
+    parser.add_argument("--legacy-binary", action="store_true", help="resume a pinned pre-capabilities enumeration worker (n=8/16 only); no SAT/repair")
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument("--min-defects", type=int, default=0)
     parser.add_argument("--max-defects", type=int, default=16)
@@ -363,6 +365,13 @@ def main():
         parser.error("require 0 <= min-defects <= max-defects <= 16")
     args.binary = str(Path(shutil.which(args.binary) or args.binary).resolve())
     n = geometry(args.cycle_length)[0]
+    if args.legacy_binary:
+        log("Legacy enumeration worker: capabilities unverified; existing protocol and binary fingerprint checks still apply")
+    else:
+        try:
+            args.capabilities = require(args.binary, [n])
+        except ValueError as error:
+            parser.error(str(error))
     candidates = set(args.candidate)
     if args.candidates:
         with open(args.candidates) as source:

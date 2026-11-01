@@ -7,6 +7,8 @@ the solver gets no target assignment or list of edges that were changed.
 """
 
 import argparse
+from graphy_binary import require
+from refine_repair import BINARY
 import csv
 import io
 from pathlib import Path
@@ -19,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", default=str(ROOT / "target/release/graphy"))
+    parser.add_argument("--binary", default=BINARY)
     parser.add_argument("--trials", type=int, default=4)
     parser.add_argument("--seconds", type=float, default=2)
     parser.add_argument("--perturb", type=int, nargs="+", default=[0, 1, 2, 4, 8])
@@ -50,6 +52,16 @@ def main():
                             if row.get("refuter") and (args.controls is not None or row["n"] == "14"))
     if not controls:
         parser.error("no controls with nonempty refuters")
+    orders = {int(row["n"]) for row in controls}
+    if args.legacy:
+        if max(orders) > 16:
+            parser.error("--legacy is unsafe above n=16; old wide repair binaries have known mask bugs")
+        print("Legacy baseline: executable capabilities are not verified", file=sys.stderr)
+    else:
+        try:
+            require(args.binary, orders)
+        except ValueError as error:
+            parser.error(str(error))
     writer = None
     for control in controls:
         for distance in args.perturb:
