@@ -288,8 +288,9 @@ def main():
     parser.add_argument("--order", type=int)
     parser.add_argument("--candidate", type=int, action="append", default=[])
     parser.add_argument("--candidates", help="decimal first-column survivor file")
-    parser.add_argument("--preset", choices=["triples", "squares", "cyclic"], action="append", default=[])
-    parser.add_argument("--template", action="append", default=[], help="e.g. s3:4, s3:4/fixed, s3:4/0+3, cycle:7+7")
+    parser.add_argument("--preset", choices=["triples", "squares", "cyclic", "klein", "binary"], action="append", default=[],
+                        help="klein: all faithful Klein-four actions; binary: also bounded rank-3/4 translations")
+    parser.add_argument("--template", action="append", default=[], help="e.g. s3:4/fixed, cycle:7+7, v4:3, xor:1.2.4+1.2+1 (8+4+2)")
     parser.add_argument("--partition-file", action="append", default=[], help="custom decimal cells, one per line, no header; repeatable")
     parser.add_argument("--min-variables", type=int, default=0)
     parser.add_argument("--max-variables", type=int, default=64)

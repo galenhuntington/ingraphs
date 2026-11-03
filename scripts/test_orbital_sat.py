@@ -112,6 +112,45 @@ class OrbitalCliTests(unittest.TestCase):
             row = self.native(directory,6,7,template(6,"cycle:6").cells,"--rounds","0")
             self.assertEqual(row["status"],"round-limit")
 
+    def test_binary_templates_against_exhaustive_small_families(self):
+        # Check new actions and a controlled exception with an independent
+        # exhaustive host/copy oracle. K3 has a V4 refuter at n=4 but not n=5;
+        # releasing two vertices at n=5 recovers a refuter.
+        with tempfile.TemporaryDirectory() as directory:
+            for n, name in ((4,"v4:1"), (4,"xor:1+2"), (5,"v4:1"), (5,"v4:1/0"), (5,"v4:1/0+4")):
+                cells = template(n,name).cells
+                full = (1 << (n*(n-1)//2))-1
+                for f in (1,3,7,12):
+                    possible = False
+                    for assignment in range(1 << len(cells)):
+                        host = sum(c for i,c in enumerate(cells) if assignment >> i & 1)
+                        if not contains(n,f,host)[0] and not contains(n,f,host ^ full)[0]:
+                            possible = True
+                            break
+                    row = self.native(directory,n,f,cells)
+                    self.assertEqual(row["status"], "refuted" if possible else "family-unsat-unverified")
+                    if possible:
+                        host = int(row["refuter"])
+                        self.assertTrue(all(host & c in (0,c) for c in cells))
+                        self.assertFalse(contains(n,f,host)[0])
+                        self.assertFalse(contains(n,f,host ^ full)[0])
+
+    def test_binary_presets_share_existing_ledger_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            options = ["--order","5","--candidate","7","--jobs","1","--seconds","0"]
+            planned,_ = self.launch(directory,*options,"--preset","klein","--preset","binary","--plan")
+            self.assertEqual(planned,[])
+            first,_ = self.launch(directory,*options,"--template","v4:1")
+            self.assertEqual(len(first),1)
+            self.assertEqual(first[0]["status"],"family-unsat-unverified")
+            self.assertEqual(self.launch(directory,*options,"--template","xor:1.2","--work","all")[0],[])
+            remaining,_ = self.launch(directory,*options,"--preset","binary","--work","all")
+            self.assertEqual(len(remaining),1)
+            self.assertTrue(all(r["status"]=="family-unsat-unverified" for r in remaining))
+            self.assertEqual(self.launch(directory,*options,"--preset","klein","--work","all")[0],[])
+            with sqlite3.connect(Path(directory)/"ledger.sqlite") as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM families").fetchone()[0],2)
+
     def test_dump_is_sound_projected_formula_with_full_witnesses(self):
         n,f,cells = 4,3,(1,6,56)
         copies = set()

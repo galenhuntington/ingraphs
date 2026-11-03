@@ -645,6 +645,27 @@ Family selectors:
   type, subject to the variable limits; it can make a much larger catalogue.
   `--min-variables`/`--max-variables` filter the **resulting** partitions
   after exceptions (default 0..64). Print the plan to see omissions/counts.
+- `--preset klein`: all faithful Klein-four actions on the host vertices,
+  up to group/vertex relabelling, filtered by the variable cap. This includes
+  all combinations of 4-vertex orbits, the three kinds of 2-vertex orbit, and
+  fixed vertices. At n=14 there are six action types with at most 30 variables,
+  or eighteen with at most 35. No exceptions are added automatically.
+- `--preset binary`: includes `klein`, plus rank-three binary translations
+  with at most four non-singleton vertex orbits, and a bounded rank-four
+  coordinate-projection portfolio with at most four such orbits. This is
+  **not** a complete catalog of elementary-abelian actions. At n=14 it gives
+  50/71/91 exact partitions at variable caps 25/30/35, respectively.
+- `--template v4:3`: three regular four-vertex Klein-four blocks, with all
+  remaining vertices fixed. At n=14 it has 28 variables; `v4:3/fixed` and
+  `v4:3/0+4` apply the usual controlled exceptions.
+- `--template xor:1.2.4+1.2+1`: shared binary translations on 8+4+2 vertices.
+  Each `+` block gives independent **row masks**, separated by dots, in up
+  to four global binary coordinates (masks 1..15). Thus `1`, `2`, and `3`
+  mean the characters `a`, `b`, and `a XOR b`, not block sizes. A block with
+  d rows has 2^d vertices; remaining vertices are fixed. These templates also
+  accept `/fixed` or explicit vertex exceptions. See the
+  [binary portfolio note](research/2026-11-01.md) for the construction,
+  scope, test results, and longer campaign commands.
 - `--partition-file FILE` accepts custom partitions: one nonzero decimal
   edge mask per line, disjoint, covering all pairs; blank/comment lines allowed.
   Explicit templates/files without a preset select only those families.
@@ -683,9 +704,11 @@ Bookkeeping and budgets:
 
 Native single-family plumbing is `graphy ingraph-orbital-sat N F --partition
 FILE`. Tests: `cargo test -r --features native,sat` and
+`python3 -m unittest discover -s scripts -p 'test_*families.py'` plus
 `python3 -m unittest discover -s scripts -p 'test_orbital_sat.py'` after rebuilding.
 They include all four-vertex candidates against exhaustive family search,
-independent projected-CNF checks, exception refinement, and interruption/resume.
+independent projected-CNF checks, exhaustive Klein-four action profiles,
+full-group/Burnside checks, exception refinement, and interruption/resume.
 
 ## Some graphs
 

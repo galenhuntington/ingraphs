@@ -2,6 +2,9 @@
 
 Syntax: s3:4 = four aligned triples under diagonal S3; c3:4 uses C3;
 d4:3 uses D4 on three squares; cycle:4+4+2+2+2 is one cyclic action.
+xor:1.2.4+1.2+1 uses binary translations on blocks of size 8+4+2:
+dot-separated integers are linear character masks in shared global bits.
+v4:3 is shorthand for three regular Klein-four blocks (xor:1.2+1.2+1.2).
 Append /fixed to release all singleton neighbourhoods, or /0+3 to release
 explicit vertex labels. Released incident pairs become individual variables.
 Family identity is the full sorted edge partition, NOT its descriptive name.
@@ -12,6 +15,7 @@ import hashlib
 import re
 
 from orbitals import cyclic_actions, edge_orbits, idx
+import binary_families
 
 
 def normalize(n, cells):
@@ -63,13 +67,23 @@ def template(n, specification):
     if len(parts) > 2:
         raise ValueError("at most one /exception selector is allowed")
     base = parts[0]
-    if base.startswith("cycle:"):
+    if base.startswith("xor:"):
+        generators = binary_families.translation_generators(n, binary_families.parse_blocks(base[4:]))
+    elif base.startswith("v4:"):
+        try:
+            layers = int(base[3:])
+        except ValueError:
+            raise ValueError("v4 needs a positive block count, e.g. v4:3") from None
+        if not 1 <= layers <= n // 4:
+            raise ValueError("v4 needs at least one four-vertex block, all fitting n")
+        generators = binary_families.translation_generators(n, [(1, 2)] * layers)
+    elif base.startswith("cycle:"):
         lengths = list(map(int, base[6:].split("+")))
         generators, = cyclic_actions(n, lengths)
     else:
         match = re.fullmatch(r"([scd])(\d+):(\d+)", base)
         if not match:
-            raise ValueError(f"invalid template {base!r}; use s3:4, c3:4, d4:3 or cycle:7+7")
+            raise ValueError(f"invalid template {base!r}; use s3:4, c3:4, d4:3, cycle:7+7, v4:3 or xor:1.2.4+1.2+1")
         kind, width, layers = match[1], int(match[2]), int(match[3])
         if width < 2 or layers < 1 or width * layers > n:
             raise ValueError("template needs width >= 2, layers >= 1 and width*layers <= n")
@@ -89,7 +103,9 @@ def template(n, specification):
 
 
 def specifications(n, preset):
-    if preset in ("triples", "squares"):
+    if preset in ("klein", "binary"):
+        yield from binary_families.specifications(n, preset)
+    elif preset in ("triples", "squares"):
         width = 3 if preset == "triples" else 4
         maximum = n // width
         for layers in (maximum, maximum - 1):

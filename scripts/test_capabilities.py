@@ -160,6 +160,25 @@ class BinaryTests(unittest.TestCase):
                 settings, = connection.execute("SELECT settings FROM campaigns").fetchone()
                 self.assertEqual(json.loads(settings)["capabilities"]["bit_width"], 256)
 
+    def test_wide_binary_portfolio_and_native_partition(self):
+        cap = require(BINARY)
+        if not cap["sat"] or cap["max_order"] < 17:
+            self.skipTest("needs u256,sat")
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory)/"binary.sqlite"
+            self.launch("orbital_sat.py", "--binary", BINARY, "--order", 17, "--candidate", 1,
+                        "--preset", "binary", "--max-variables", 30, "--ledger", db, "--plan", check=True)
+            with sqlite3.connect(db) as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM families").fetchone()[0], 38)
+            name = "xor:1.2+4.8+1.4+2.8"
+            family = template(17, name)
+            self.assertEqual(sum(family.cells).bit_length(), 136)
+            result = self.launch("orbital_sat.py", "--binary", BINARY, "--order", 17, "--candidate", 1,
+                                 "--template", name, "--ledger", db, "--seconds", 0, check=True)
+            row, = csv.DictReader(io.StringIO(result.stdout))
+            self.assertEqual(row["status"], "family-unsat-unverified")
+            self.assertEqual(row["family_id"], family.id)
+
     def test_wide_fixed_edge_cnf_units(self):
         cap = require(BINARY)
         if not cap["sat"] or cap["max_order"] < 17:
