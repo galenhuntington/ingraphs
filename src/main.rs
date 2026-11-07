@@ -501,6 +501,19 @@ enum C {
         /// Graphs file
         path: String,
     },
+    /// Generate random graphs of given size and edge count.
+    Random {
+        /// Number of vertices
+        size: usize,
+        /// Minimum number of edges
+        edges: Option<usize>,
+        /// Number of graphs.
+        #[arg(short, long, default_value_t=1)]
+        count: usize,
+        /// Random number seed.
+        #[arg(long)]
+        seed: Option<u64>,
+    },
     /// Placeholder for custom operations
     Run {
         /// Number of vertices
@@ -709,6 +722,19 @@ pub fn main() {
                     }
                 }
                 println!();
+            }
+        }
+        C::Random { size, edges, count, seed } => {
+            // TODO update rand crate; it's changed a lot
+            use rand::{Rng,rngs::StdRng,SeedableRng};
+            let rng = &mut StdRng::seed_from_u64(seed.unwrap_or_else(|| rand::thread_rng().r#gen()));
+            for _ in 0..count {
+                let g = match edges {
+                    Some(e) => base::random_graph_edges(rng, size, e),
+                    _       => base::random_graph(rng, size),
+                };
+                let g = enumerate::to_best(&g); // XXX this is really slow
+                println!("{}", g.edges.0.0);
             }
         }
     }

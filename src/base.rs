@@ -280,6 +280,17 @@ pub fn random_graph(rng: &mut impl rand::Rng, size: usize) -> Graph {
     Graph::from_bits(size, bits)
 }
 
+// Not uniform across unlabelled graphs due to symmetries.
+pub fn random_graph_edges(rng: &mut impl rand::Rng, size: usize, edges: usize) -> Graph {
+    let top = Graph::triangle(size);
+    let mut bits: BitNum = ZERO;
+    while edges <= size && bits.count_ones() != edges as u32 {
+        let b = rng.gen_range(0..top);
+        bits |= bit(b);
+    }
+    Graph::from_bits(size, bits)
+}
+
 
 #[cfg(test)]
 mod tests {
