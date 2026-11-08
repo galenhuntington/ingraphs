@@ -501,18 +501,21 @@ enum C {
         /// Graphs file
         path: String,
     },
-    /// Generate random graphs of given size and edge count.
+    /// Generate random graphs
     Random {
         /// Number of vertices
         size: usize,
-        /// Minimum number of edges
+        /// Number of edges
         edges: Option<usize>,
         /// Number of graphs.
         #[arg(short, long, default_value_t=1)]
         count: usize,
         /// Random number seed.
         #[arg(long)]
-        seed: Option<u64>,
+        rng_seed: Option<u64>,
+        /// Turn off canonicalization for speed.
+        #[arg(long)]
+        no_canon: bool,
     },
     /// Placeholder for custom operations
     Run {
@@ -665,14 +668,14 @@ pub fn main() {
             }
             for sub in subs {
                 if table { print!(" {:width$}", sub, width=width) }
-                for sup in sups.iter() {
-                    let size = tools::infer_size(*sup);
+                for &sup in sups.iter() {
+                    let size = tools::infer_size(sup);
                     let sub = Graph::from_bits(size, sub);
-                    let sup = Graph::from_bits(size, *sup);
+                    let sup = Graph::from_bits(size, sup);
                     let ans = tools::is_subgraph_of(&sub, &sup);
                     print!(" {}{:>width$}{}",
                         if color { if ans { "\x1b[01;32m" } else { "\x1b[01;31m" } } else { "" },
-                        tools::is_subgraph_of(&sub, &sup),
+                        ans,
                         if color { "\x1b[00m" } else { "" },
                         );
                 }
@@ -724,16 +727,17 @@ pub fn main() {
                 println!();
             }
         }
-        C::Random { size, edges, count, seed } => {
+        C::Random { size, edges, count, rng_seed, no_canon } => {
             // TODO update rand crate; it's changed a lot
             use rand::{Rng,rngs::StdRng,SeedableRng};
-            let rng = &mut StdRng::seed_from_u64(seed.unwrap_or_else(|| rand::thread_rng().r#gen()));
+            let rng = &mut StdRng::seed_from_u64(rng_seed.unwrap_or_else(
+                || rand::thread_rng().r#gen()));
             for _ in 0..count {
                 let g = match edges {
                     Some(e) => base::random_graph_edges(rng, size, e),
                     _       => base::random_graph(rng, size),
                 };
-                let g = enumerate::to_best(&g); // XXX this is really slow
+                let g = if no_canon { g } else { enumerate::to_best(&g) } ;
                 println!("{}", g.edges.0.0);
             }
         }

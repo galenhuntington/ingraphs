@@ -284,7 +284,7 @@ pub fn random_graph(rng: &mut impl rand::Rng, size: usize) -> Graph {
 pub fn random_graph_edges(rng: &mut impl rand::Rng, size: usize, edges: usize) -> Graph {
     let top = Graph::triangle(size);
     let mut bits: BitNum = ZERO;
-    while edges <= size && bits.count_ones() != edges as u32 {
+    while edges <= top && bits.count_ones() != edges as u32 {
         let b = rng.gen_range(0..top);
         bits |= bit(b);
     }
