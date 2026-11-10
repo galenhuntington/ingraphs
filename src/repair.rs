@@ -9,6 +9,7 @@
 use crate::base::{BitNum, Bits, Graph, MAX_SIZE, ZERO, bit, random_graph};
 use crate::perm::Perm;
 use crate::tools::{build_sorted_row, find_subgraph_ss, read_graphs};
+use crate::matcher::{PreparedHost, PreparedPattern};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -425,7 +426,7 @@ pub fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) ->
     }
     let timer = Instant::now();
     let deadline = (config.seconds > 0.0).then(|| Duration::from_secs_f64(config.seconds));
-    let row = build_sorted_row(pattern);
+    let prepared = PreparedPattern::new(pattern);
     let mut flips = 0;
     let mut checks = 0;
     let mut oracle_time = Duration::ZERO;
@@ -480,7 +481,7 @@ pub fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) ->
                         Perm::random(rng, start.size)
                     };
                     let relabelled = host.renumber(&permutation);
-                    let copy = find_subgraph_ss(pattern, &row, &relabelled)
+                    let copy = prepared.find_subgraph(&PreparedHost::new(&relabelled))
                         .map(|copy| copy.unrenumber(&permutation));
                     checks += 1;
                     oracle_time += before.elapsed();
@@ -610,13 +611,14 @@ pub fn run(args: Args) {
             candidates.par_iter().for_each(|pattern| {
                 let mut order: Vec<usize> = (0..seeds.len()).collect();
                 if args.free_seeds && !seeds.is_empty() {
-                    let row = build_sorted_row(pattern);
+                    let prepared = PreparedPattern::new(pattern);
                     let free: Vec<_> = order
                         .iter()
                         .copied()
                         .filter(|&i| {
-                            find_subgraph_ss(pattern, &row, &seeds[i]).is_none()
-                                || find_subgraph_ss(pattern, &row, &seeds[i].complement()).is_none()
+                            let host = PreparedHost::new(&seeds[i]);
+                            !prepared.is_subgraph_of(&host)
+                                || !prepared.is_subgraph_of(&host.complement())
                         })
                         .collect();
                     if !free.is_empty() {

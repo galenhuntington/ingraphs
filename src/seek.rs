@@ -2,6 +2,7 @@ use crate::base::{Graph,Bits,MAX_SIZE,bit};
 use crate::canon;
 use crate::tools;
 use crate::enumerate;
+use crate::matcher::{PreparedHost,PreparedPattern};
 use dashmap::DashSet;
 use rayon::prelude::*;
 use rand::{Rng,SeedableRng,thread_rng,rngs::StdRng,prelude::SliceRandom};
@@ -10,7 +11,7 @@ use std::sync::atomic::{AtomicBool,Ordering};
 struct Fixed<'a> {
     gr: &'a Graph,
     seen: &'a DashSet<canon::Key>,
-    row: &'a Vec<(usize, usize)>,
+    pattern: &'a PreparedPattern,
     limit: usize,
     rng: StdRng,
     quit: &'a AtomicBool,
@@ -22,7 +23,7 @@ struct Fixed<'a> {
 fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
     if fixed.quit.load(Ordering::Relaxed) { return None }
     // eprintln!("recurse: {} {:?}", grc, grc);
-    match tools::find_subgraph_ss(fixed.gr, fixed.row, &ce.complement()) {
+    match fixed.pattern.find_subgraph(&PreparedHost::new(&ce.complement())) {
         Some(grtw) => {
             // if ce.bits().count_ones() == fixed.top_size { return None }
             let hi = tools::hi_bit_ix(grtw.bits()) + 1;
@@ -36,7 +37,7 @@ fn recurse(fixed: &mut Fixed, ce: Graph) -> Option<Graph> {
                 // eprintln!("{}: {} -> {}", b, grtw, grnext);
                 let grnext = Graph::from_bits(fixed.gr.size, grnext);
                 // eprintln!("1 {}: {} -> {}; {}", b, grtw, grnext, fixed.gr);
-                if tools::isso_inner(fixed.gr, fixed.row, &grnext) { continue }
+                if fixed.pattern.is_subgraph_of(&PreparedHost::new(&grnext)) { continue }
                 // eprintln!("2 {}: {} -> {}; {}", b, grtw, grnext, fixed.gr);
                 let key = canon::key(&grnext);
                 let seen = fixed.seen;
@@ -89,14 +90,14 @@ pub fn seek_seeded(gr: &Graph, limit: usize, seed: u64) -> (Option<Graph>, usize
     let mut rng = StdRng::seed_from_u64(seed);
     rets.shuffle(&mut rng);
     let rets: Vec<_> = rets.into_iter().map(|grm| (grm, rng.r#gen::<u64>())).collect();
-    let row = tools::build_sorted_row(gr);
+    let pattern = PreparedPattern::new(gr);
     // let rets: Vec<_> = rets.iter().cloned().rev().collect();
     let res = rets.par_iter().find_map_any(|(grm, branch_seed)| {
         // eprintln!("seek: {:?} / {}", grm, tools::count_symmetries(&grm));
         recurse(&mut Fixed {
                 gr,
                 seen,
-                row: &row,
+                pattern: &pattern,
                 limit,
                 rng: StdRng::seed_from_u64(*branch_seed),
                 quit,

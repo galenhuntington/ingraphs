@@ -7,7 +7,6 @@
 use crate::base::{BitNum,Graph,Bits,rev_hi_index,MAX_SIZE,ZERO,bit};
 use crate::perm::{Perm,all_perms};
 use crate::enumerate;
-use std::cmp::Reverse;
 use std::time::SystemTime;
 use utc_dt::UTCDatetime;
 use std::collections::{BTreeMap,BTreeSet};
@@ -213,249 +212,47 @@ pub fn count_symmetries(gr: &Graph) -> u128 {
     mult.checked_mul(ac.go(0)).expect("automorphism count overflow")
 }
 
-const UNFILLED: usize = 0xfffff;
+// Kept as compatibility entry points. Bulk callers should retain the prepared
+// matcher objects rather than repeatedly supplying only a degree/order row.
+pub use crate::matcher::IIResult;
+use crate::matcher::{PreparedColours, PreparedHost, PreparedPattern};
 
-pub trait IIResult {
-    fn from_perm(perm: Perm) -> Self;
-    fn failure() -> Self;
-}
-
-impl IIResult for bool {
-    fn from_perm(_perm: Perm) -> bool { true }
-    fn failure() -> bool { false }
-}
-
-impl IIResult for Option<Perm> {
-    fn from_perm(perm: Perm) -> Self { Some(perm) }
-    fn failure() -> Self { None }
-}
-
-// Neighbor masks, indexed by vertex
+// Also used by the automorphism counter above.
 fn adj_masks(gr: &Graph) -> [u32; MAX_SIZE] {
     let mut adj = [0u32; MAX_SIZE];
     let mut bits = gr.bits();
     while bits != 0 {
-        let i = bits.trailing_zeros() as usize;
+        let (a, b) = crate::base::rev_index(bits.trailing_zeros() as usize);
         bits &= bits - 1;
-        let (a, b) = crate::base::rev_index(i);
         adj[a] |= 1 << b;
         adj[b] |= 1 << a;
     }
     adj
 }
 
-struct Isso<'a> {
-    sub_sorted: &'a [(usize, usize)],
-    sub_adj: [u32; MAX_SIZE],
-    sup_adj: [u32; MAX_SIZE],
-    sup_deg: [usize; MAX_SIZE],
-    // sup slots in descending-degree order, tried in this order
-    sup_order: [usize; MAX_SIZE],
-    // for each sub vertex, the sup slots its already-placed neighbors occupy
-    req: [u32; MAX_SIZE],
-    // sup slot -> sub vertex
-    vec: [usize; MAX_SIZE],
-    // sub vertex -> its sup slot (valid once assigned)
-    img: [usize; MAX_SIZE],
-    // interchangeable predecessor in matching order, else UNFILLED; el's
-    // image is forced above its predecessor's, killing twin permutations
-    twin_pred: [usize; MAX_SIZE],
-    // interchangeable earlier (in sup_order) sup slot: while it is unused,
-    // this slot is redundant to try
-    sup_twin_pred: [usize; MAX_SIZE],
-    used: u32,
-    size: usize,
-}
-
-impl Isso<'_> {
-    fn go(&mut self, i: usize) -> bool {
-        let (el_deg, el) = self.sub_sorted[i];
-        if el_deg == 0 {
-            // the rest are isolated; drop them into free slots
-            let mut j = 0;
-            for k in i..self.size {
-                while self.used & (1 << j) != 0 { j += 1 }
-                self.vec[j] = self.sub_sorted[k].1;
-                self.used |= 1 << j;
-            }
-            return true;
-        }
-        let req_el = self.req[el];
-        // symmetry breaking: only slots above an interchangeable predecessor's
-        let above = match self.twin_pred[el] {
-            UNFILLED => 0,
-            p => self.img[p] + 1,
-        };
-        for jx in 0..self.size {
-            let j = self.sup_order[jx];
-            if j < above { continue }
-            let jb = 1u32 << j;
-            if self.used & jb != 0 { continue }
-            match self.sup_twin_pred[j] {
-                UNFILLED => {},
-                p => if self.used & (1 << p) == 0 { continue },
-            }
-            if el_deg > self.sup_deg[j] { continue }
-            // every placed neighbor of el must sit on a sup neighbor of j
-            if req_el & !self.sup_adj[j] != 0 { continue }
-            self.vec[j] = el;
-            self.img[el] = j;
-            self.used |= jb;
-            let mut nbrs = self.sub_adj[el];
-            while nbrs != 0 {
-                let u = nbrs.trailing_zeros() as usize;
-                nbrs &= nbrs - 1;
-                self.req[u] |= jb;
-            }
-            if i == self.size - 1 || self.go(i + 1) { return true }
-            let mut nbrs = self.sub_adj[el];
-            while nbrs != 0 {
-                let u = nbrs.trailing_zeros() as usize;
-                nbrs &= nbrs - 1;
-                self.req[u] &= !jb;
-            }
-            self.used &= !jb;
-            self.vec[j] = UNFILLED;
-        }
-        false
-    }
-}
-
 pub fn isso_inner<T: IIResult>(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> T {
-    let size = sub.size;
-    let sup_adj = adj_masks(sup);
-    let mut sup_deg = [0; MAX_SIZE];
-    for j in 0..size { sup_deg[j] = sup_adj[j].count_ones() as usize }
-    let mut sup_order = [0; MAX_SIZE];
-    for j in 0..size { sup_order[j] = j }
-    sup_order[..size].sort_unstable_by_key(|&j| Reverse(sup_deg[j]));
-    let sub_adj = adj_masks(sub);
-    // chain interchangeable vertices (swapping them is an automorphism)
-    // in matching order; correcting swaps always terminate, so demanding
-    // ascending images along each chain loses no embeddings
-    let mut twin_pred = [UNFILLED; MAX_SIZE];
-    for i in 1..size {
-        let el = sub_sorted[i].1;
-        for k in (0..i).rev() {
-            let u = sub_sorted[k].1;
-            let both = !((1u32 << el) | (1 << u));
-            if sub_adj[el] & both == sub_adj[u] & both {
-                twin_pred[el] = u;
-                break;
-            }
-        }
-    }
-    let mut sup_twin_pred = [UNFILLED; MAX_SIZE];
-    for jx in 1..size {
-        let j = sup_order[jx];
-        for kx in (0..jx).rev() {
-            let u = sup_order[kx];
-            // order is degree-sorted and twins share a degree
-            if sup_deg[u] != sup_deg[j] { break }
-            let both = !((1u32 << j) | (1 << u));
-            if sup_adj[j] & both == sup_adj[u] & both {
-                sup_twin_pred[j] = u;
-                break;
-            }
-        }
-    }
-    let mut st = Isso {
-        sub_sorted,
-        sub_adj,
-        sup_adj,
-        sup_deg,
-        sup_order,
-        req: [0; MAX_SIZE],
-        vec: [UNFILLED; MAX_SIZE],
-        img: [UNFILLED; MAX_SIZE],
-        twin_pred,
-        sup_twin_pred,
-        used: 0,
-        size,
-    };
-    if st.go(0) {
-        T::from_perm(Perm::new_unchecked(st.vec[..size].to_vec()))
-    } else {
-        T::failure()
-    }
+    PreparedPattern::with_row(sub, sub_sorted).search(&PreparedHost::new(sup))
 }
 
-// Matching order for isso_inner: greedy connected order (most already-placed
-// neighbors first, then highest degree) so each placement is constrained
-// early.  Isolated vertices necessarily land at the end.
-// Matching order for isso_inner: connected components densest first (an
-// unembeddable dense component then fails before the search wastes time
-// embedding easy sparse ones), greedy connected order within a component.
-// Isolated vertices have density 0 and land at the end, as isso requires.
 pub fn build_sorted_row(gr: &Graph) -> Vec<(usize, usize)> {
-    let mut adj = adj_masks(gr);
-    // edges above the stated size are ignored (legacy truncation behavior)
-    let lim = (1u32 << gr.size) - 1;
-    for m in adj.iter_mut() { *m &= lim }
-    let mut seen = 0u32;
-    let mut comps: Vec<(u32, u32, u32)> = Vec::new();  // (mask, edges2, size)
-    for v in 0..gr.size {
-        if seen & (1 << v) != 0 { continue }
-        let mut mask = 1u32 << v;
-        loop {
-            let grown = comps_grow(&adj, mask, gr.size);
-            if grown == mask { break }
-            mask = grown;
-        }
-        seen |= mask;
-        let edges2: u32 = (0..gr.size)
-            .filter(|u| mask & (1 << u) != 0)
-            .map(|u| adj[u].count_ones())
-            .sum();
-        comps.push((mask, edges2, mask.count_ones()));
-    }
-    // densest first: e1/v1 > e2/v2  ⟺  e1*v2 > e2*v1; ties by size ascending
-    comps.sort_by(|a, b|
-        (b.1 * a.2).cmp(&(a.1 * b.2)).then(a.2.cmp(&b.2)));
-    let mut row = Vec::with_capacity(gr.size);
-    for (mask, _, _) in comps {
-        let mut placed = 0u32;
-        for _ in 0..mask.count_ones() {
-            let best = (0..gr.size)
-                .filter(|v| mask & (1 << v) != 0 && placed & (1 << v) == 0)
-                .max_by_key(|&v| (
-                    (adj[v] & placed).count_ones(),
-                    adj[v].count_ones(),
-                    Reverse(v),
-                ))
-                .unwrap();
-            row.push((adj[best].count_ones() as usize, best));
-            placed |= 1 << best;
-        }
-    }
-    row
-}
-
-fn comps_grow(adj: &[u32; MAX_SIZE], mask: u32, size: usize) -> u32 {
-    let mut out = mask;
-    for u in 0..size {
-        if mask & (1 << u) != 0 { out |= adj[u] }
-    }
-    out
+    crate::matcher::sorted_row(gr)
 }
 
 pub fn ingraph_check(sup: &Graph, sub_sorted: &[(usize, usize)], sub: &Graph) -> bool {
-    let isup = sup.complement();
-    isso_inner(sub, sub_sorted, &isup) || isso_inner(sub, sub_sorted, sup)
+    PreparedColours::new(sup).covers(&PreparedPattern::with_row(sub, sub_sorted))
 }
 
 pub fn noncovers<B: Bits + Copy, V: Iterator<Item=B>>(sups: V, sub: &Graph)
         -> impl Iterator<Item=B> {
-    let sub_sorted = build_sorted_row(sub);
+    let pattern = PreparedPattern::new(sub);
     let min_edges = Graph::triangle(sub.size).div_ceil(2);
     sups.filter(
         move |sup| sup.bits().count_ones() as usize >= min_edges
-            && !ingraph_check(&Graph::from_bits(sub.size, sup.bits()), &sub_sorted, sub))
+            && !PreparedColours::new(&Graph::from_bits(sub.size, sup.bits())).covers(&pattern))
 }
 
 pub fn is_subgraph_of(sub: &Graph, sup: &Graph) -> bool {
-    let sub_sorted = build_sorted_row(sub);
-    isso_inner(sub, &sub_sorted, sup)
+    PreparedPattern::new(sub).is_subgraph_of(&PreparedHost::new(sup))
 }
 
 pub fn find_subgraph_ss(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph) -> Option<Graph> {
@@ -463,7 +260,7 @@ pub fn find_subgraph_ss(sub: &Graph, sub_sorted: &[(usize, usize)], sup: &Graph)
 }
 
 pub fn find_subgraph_of(sub: &Graph, sup: &Graph) -> Option<Graph> {
-    find_subgraph_ss(sub, &build_sorted_row(sub), sup)
+    PreparedPattern::new(sub).find_subgraph(&PreparedHost::new(sup))
 }
 
 pub fn naive_is_subgraph_of(sub: &Graph, sup: &Graph) -> bool {

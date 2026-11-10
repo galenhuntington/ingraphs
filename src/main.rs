@@ -2,6 +2,7 @@ pub mod perm;
 pub mod base;
 pub mod testers;
 pub mod tools;
+pub mod matcher;
 pub mod enumerate;
 pub mod seek;
 pub mod progress;
@@ -12,7 +13,8 @@ pub mod orbital_enum;
 pub mod capabilities;
 
 use base::{Graph,BitNum,Bits,MAX_SIZE};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap,BTreeSet};
+use matcher::{PreparedColours,PreparedHost,PreparedPattern};
 use clap::{Parser,Subcommand};
 use std::time::{Instant,Duration};
 
@@ -94,6 +96,9 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, expiration: usi
     let progress = progress::Progress::new();
     let no_time = Duration::from_secs(0);
     let mut counterexamples: BTreeSet<_> = seeds.iter().map(|&ce| (no_time, ce, 0)).collect();
+    // Lazy preparation keeps untouched seeds cheap. The iterator API can
+    // change order (unlike the CLI); replace cached data if that happens.
+    let mut prepared = BTreeMap::new();
     for (i, gr) in pool.enumerate() {
         let val = gr.bits();
         let ec = val.count_ones();
@@ -101,18 +106,25 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, expiration: usi
         // A lot of hacky stuff here was trying to find "better" counterexamples.
         // let chkce = tools::noncovers(counterexamples.iter().map(|(_, x)| *x), &gr).next();
         let chkce = {
-            let sub_sorted = tools::build_sorted_row(&gr);
+            let pattern = PreparedPattern::new(&gr);
             let mut ans = None;
             let vec: Vec<_> = counterexamples.iter().cloned().collect();
             for el@(d1, supb, j) in vec {
-                let sup = Graph::from_bits(gr.size, supb);
+                let sup = prepared.entry(supb).or_insert_with(||
+                    PreparedColours::new(&Graph::from_bits(gr.size, supb)));
+                if sup.graph().size != gr.size {
+                    *sup = PreparedColours::new(&Graph::from_bits(gr.size, supb));
+                }
                 let t0 = Instant::now();
-                let chk = tools::ingraph_check(&sup, &sub_sorted, &gr);
+                let chk = sup.covers(&pattern);
                 let d = t0.elapsed();
                 counterexamples.remove(&el);
                 if chk {
                     if expiration == 0 || i < j + expiration {
                         counterexamples.insert((d.max(d1), supb, j));
+                    } else {
+                        // Do not retain prepared copies of expired refuters.
+                        prepared.remove(&supb);
                     }
                 } else {
                     counterexamples.insert((d, supb, i));
@@ -152,7 +164,7 @@ fn ingraph_seek(pool: impl Iterator<Item=Graph>, bailout: usize, expiration: usi
 fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<Graph> {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicU64, Ordering};
-    let sub_sorted = tools::build_sorted_row(sub);
+    let pattern = PreparedPattern::new(sub);
     let done = AtomicU64::new(0);
     list.par_bridge().find_map_any(|sup| {
         let d = done.fetch_add(1, Ordering::Relaxed);
@@ -161,7 +173,7 @@ fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<
             eprint!(" Progress: {}M ({})\r", dm, tools::timestamp());
             if dm % 50 == 0 { eprintln!(); }
         }
-        (!tools::ingraph_check(&sup, &sub_sorted, sub)).then_some(sup)
+        (!PreparedColours::new(&sup).covers(&pattern)).then_some(sup)
     })
 }
 
@@ -172,16 +184,16 @@ fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<
 fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicU64,Ordering};
-    let library: Vec<Graph> = library.iter()
-        .map(|&h| Graph::from_bits(size, h)).collect();
+    let library: Vec<PreparedColours> = library.iter()
+        .map(|&h| PreparedColours::new(&Graph::from_bits(size, h))).collect();
     let progress = AtomicU64::new(0);
     let survived = AtomicU64::new(0);
     let results: Vec<_> = candidates.par_iter().map(|&g| {
         let gr = Graph::from_bits(size, g);
-        let sorted = tools::build_sorted_row(&gr);
+        let pattern = PreparedPattern::new(&gr);
         let hit = library.iter()
-            .find(|h| !tools::ingraph_check(h, &sorted, &gr))
-            .map(|h| h.bits());
+            .find(|h| !h.covers(&pattern))
+            .map(|h| h.graph().bits());
         let d = progress.fetch_add(1, Ordering::Relaxed);
         if hit.is_none() { survived.fetch_add(1, Ordering::Relaxed); }
         if d % 1000 == 0 { eprint!(" Progress: {}k\r", d / 1000); }
@@ -195,12 +207,12 @@ fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
 }
 
 fn free_scan(sub: &Graph, list: impl Iterator<Item=Graph>) {
-    let sub_sorted = tools::build_sorted_row(sub);
+    let pattern = PreparedPattern::new(sub);
     let mut done = 0;
     let mut found = 0;
     for sup in list {
         done += 1;
-        if !tools::isso_inner::<bool>(sub, &sub_sorted, &sup) {
+        if !pattern.is_subgraph_of(&PreparedHost::new(&sup)) {
             found += 1;
             println!("{},{},{}", sup.bits(), sup, tools::timestamp());
         }
@@ -212,7 +224,7 @@ fn free_scan(sub: &Graph, list: impl Iterator<Item=Graph>) {
 // sub-free, and for each report whether the complement covers sub.  A "false"
 // in the third column is a counterexample to sub being a universal ingraph.
 fn free_close(sub: &Graph, seeds: impl Iterator<Item=Graph>) {
-    let sub_sorted = tools::build_sorted_row(sub);
+    let pattern = PreparedPattern::new(sub);
     let mut seen = BTreeSet::new();
     let mut level = Vec::new();
     for g in seeds {
@@ -225,13 +237,13 @@ fn free_close(sub: &Graph, seeds: impl Iterator<Item=Graph>) {
         let mut next = Vec::new();
         for g in &level {
             count += 1;
-            let covered = tools::is_subgraph_of(sub, &g.complement());
+            let covered = pattern.is_subgraph_of(&PreparedHost::new(&g.complement()));
             if !covered { bad += 1 }
             println!("{},{},{},{}", g.bits(), g.edge_count(), covered, g);
             for ext in tools::bump(g, true) {
                 if !seen.contains(&ext) {
                     let eg = Graph::from_bits(g.size, ext);
-                    if !tools::isso_inner::<bool>(sub, &sub_sorted, &eg) {
+                    if !pattern.is_subgraph_of(&PreparedHost::new(&eg)) {
                         seen.insert(ext);
                         next.push(eg);
                     }
@@ -555,6 +567,27 @@ fn parse_subgraph_args(strs: Vec<String>) -> Option<(Vec<BitNum>, Vec<BitNum>)> 
     }
 }
 
+fn is_subgraph_bits(sub: BitNum, sup: BitNum) -> bool {
+    let size = tools::infer_size(sup);
+    // A matrix may compare graphs of different inferred orders. Reject an
+    // oversized pattern instead of preparing a graph with out-of-range edges.
+    tools::infer_size(sub) <= size
+        && tools::is_subgraph_of(&Graph::from_bits(size, sub), &Graph::from_bits(size, sup))
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn subgraph_matrix_handles_mixed_inferred_orders() {
+        assert!(!is_subgraph_bits(BitNum::from(7u8), BitNum::from(1u8)));
+        assert!(is_subgraph_bits(BitNum::from(1u8), BitNum::from(7u8)));
+        assert!(is_subgraph_bits(base::ZERO, BitNum::from(1u8)));
+        assert!(!is_subgraph_bits(BitNum::from(1u8), base::ZERO));
+    }
+}
+
 pub fn main() {
     let args = Cli::parse();
     match args.command {
@@ -669,10 +702,7 @@ pub fn main() {
             for sub in subs {
                 if table { print!(" {:width$}", sub, width=width) }
                 for &sup in sups.iter() {
-                    let size = tools::infer_size(sup);
-                    let sub = Graph::from_bits(size, sub);
-                    let sup = Graph::from_bits(size, sup);
-                    let ans = tools::is_subgraph_of(&sub, &sup);
+                    let ans = is_subgraph_bits(sub, sup);
                     print!(" {}{:>width$}{}",
                         if color { if ans { "\x1b[01;32m" } else { "\x1b[01;31m" } } else { "" },
                         ans,

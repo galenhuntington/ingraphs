@@ -6,8 +6,7 @@
 use super::*;
 
 struct Search<'a> {
-    pattern: &'a Graph,
-    row: Vec<(usize, usize)>,
+    pattern: PreparedPattern,
     config: &'a Config,
     rng: &'a mut StdRng,
     timer: Instant,
@@ -36,10 +35,11 @@ impl Search<'_> {
         // always have the SAME depth budget. Plain exact-key memoization is safe.
         self.seen.insert(host.bits());
         let before = Instant::now();
-        let mut copy = find_subgraph_ss(self.pattern, &self.row, &host);
+        let prepared = PreparedHost::new(&host);
+        let mut copy = self.pattern.find_subgraph(&prepared);
         self.checks += 1;
         if copy.is_none() {
-            copy = find_subgraph_ss(self.pattern, &self.row, &host.complement());
+            copy = self.pattern.find_subgraph(&prepared.complement());
             self.checks += 1;
         }
         self.oracle_time += before.elapsed();
@@ -64,8 +64,7 @@ impl Search<'_> {
 
 pub(super) fn walk(pattern: &Graph, start: Graph, config: &Config, rng: &mut StdRng) -> Outcome {
     let mut search = Search {
-        pattern,
-        row: build_sorted_row(pattern),
+        pattern: PreparedPattern::new(pattern),
         config,
         rng,
         timer: Instant::now(),

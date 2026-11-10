@@ -130,7 +130,8 @@ graphs with isolated vertices; it does not change the minimum sought.
 
 `seek()` and the search phase of `ingraph-seek` use exact native keys too,
 while keeping working graph labels separate. Only a returned witness is
-converted to minimum-decimal form. The matcher-only seed phase is unchanged.
+converted to minimum-decimal form. The matcher-only seed phase reuses prepared
+candidates and two-colour library graphs (see below).
 For repeatable bounded experiments:
 
 ```sh
@@ -143,6 +144,39 @@ Multiple workers remain scheduling-dependent. The bailout is a soft cap on
 distinct cached states (concurrent insertions can overshoot slightly); hitting
 it now cancels sibling branches. **`None` from a bounded run is inconclusive,**
 not a universality certificate. `--bailout 0` still skips the search.
+
+### Prepared subgraph matching
+
+The existence matcher in `src/matcher.rs` now rejects impossible component
+packings before backtracking. Every connected candidate component must fit
+inside one host component; several candidate components may share a host
+component. This is a necessary check, not a substitute for the exact matcher.
+For example, components of sizes `10+7+1` cannot fit into `14+4`.
+
+`PreparedPattern`, `PreparedHost`, and `PreparedColours` own immutable graphs
+and cache adjacency masks, components, degrees, search orders and twin data.
+Prepare a candidate once for many hosts, and a host/complement pair once for
+many candidates. The types are shareable between threads. Both sides must
+have the same order (pad a smaller candidate with isolates); invalid packed
+edges and stale legacy degree rows are rejected instead of silently used.
+The old `tools` matcher functions remain compatibility wrappers.
+
+`cull` prepares its library once; `ingraph-seek` prepares used entries lazily
+and drops their prepared data when they expire. `ingraph-check` prepares
+streamed hosts one at a time. `seek`, free-graph operations, and the learned
+and neighbourhood repair loops retain their prepared candidate. Existence
+queries no longer allocate a permutation just to return `true`.
+
+Two-colour checks skip structurally impossible colours and try the denser
+feasible colour first, with complement-first ties. This is only a speed
+heuristic; a refuter still requires exact absence in both colours. The
+packing check removes the known n=18 disconnected-host pathology, but does
+not bound the cost of other subgraph searches or change soft time limits.
+
+See [matcher notes and benchmarks](research/2026-11-09.md) for API examples,
+measurements, and validation. No new campaign flags are required.
+
+### Orbital generation
 
 Orbital generation streams without retaining emitted graphs. A useful
 heuristic-library pipeline is:
