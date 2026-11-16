@@ -181,14 +181,14 @@ fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<
 // a library graph H refutes candidate G if G embeds in neither H nor its
 // complement.  Prints candidate,refuter (or None for survivors).
 // Multithreaded but otherwise often much slower than ingraph-seek, and doesn't stream.
-fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
+fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum], survivors: bool) {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicU64,Ordering};
     let library: Vec<PreparedColours> = library.iter()
         .map(|&h| PreparedColours::new(&Graph::from_bits(size, h))).collect();
     let progress = AtomicU64::new(0);
     let survived = AtomicU64::new(0);
-    let results: Vec<_> = candidates.par_iter().map(|&g| {
+    let results = candidates.par_iter().map(|&g| {
         let gr = Graph::from_bits(size, g);
         let pattern = PreparedPattern::new(&gr);
         let hit = library.iter()
@@ -198,9 +198,15 @@ fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
         if hit.is_none() { survived.fetch_add(1, Ordering::Relaxed); }
         if d % 1000 == 0 { eprint!(" Progress: {}k\r", d / 1000); }
         (g, hit)
-    }).collect();
+    });
+    // Should allow ExactSizeIterator for second case.
+    let results: Vec<_> = if survivors {
+            results.filter(|(_, hit)| hit.is_none()).collect() // XXX size is known
+        } else {
+            results.collect()
+        };
     for (g, hit) in results {
-        println!("{},{:?}", g, hit);
+        println!("{},{:?}", g, hit); // XXX no hit if survivors?
     }
     eprintln!("\nCandidates: {}, survivors: {}",
         candidates.len(), survived.load(Ordering::Relaxed));
@@ -283,36 +289,11 @@ fn miss_counts(gr: &Graph) -> (usize, usize, u128) {
     counts
 }
 
-fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: Option<BitNum>, internal_labels: bool) {
-    let Some(max) = max else {
-        for g in successors::generate(size, pool) {
-            // Internal keys are deliberately NOT the public decimal convention.
-            let g = if internal_labels { g } else { enumerate::to_best(&g) };
-            println!("{},{},[],", g.bits(), g);
-        }
-        return;
-    };
-    // --max compares minimum-decimal labels; keep the legacy path for it.
-    let pool: BTreeSet<_> = pool.map(|g|
-        enumerate::to_best(&Graph::from_bits(size, g)).bits()).collect();
-    let extends: BTreeSet<_> = pool.iter().flat_map(|g| tools::bump(
-            &Graph::from_bits(size, *g), true)).collect();
-    for g in extends {
-        let rets = tools::bump(&Graph::from_bits(size, g), false);
-        let mut highs = Vec::new();
-        let mut bads = Vec::new();
-        for g1 in rets.iter() {
-            if *g1 > max {
-                highs.push(*g1);
-                continue;
-            }
-            if !pool.contains(g1) {
-                bads.push(g1);
-            }
-        }
-        if !bads.is_empty() { continue }
-        print!("{},{},{:?},", g.bits(), Graph::from_bits(size, g), bads);
-        show_iter(highs.iter().cloned());
+fn successors(size: usize, pool: impl Iterator<Item=BitNum>, internal_labels: bool) {
+    for g in successors::generate(size, pool) {
+        // Internal keys are deliberately NOT the public decimal convention.
+        let g = if internal_labels { g } else { enumerate::to_best(&g) };
+        println!("{}", g.bits());
     }
 }
 
@@ -442,9 +423,6 @@ enum C {
         size: usize,
         /// Graphs file
         path: String,
-        /// Maximum minimum-decimal retraction to require (uses the legacy path)
-        #[arg(long)]
-        max: Option<BitNum>,
         /// Keep fast internal canonical labels in output, e.g. for chained successors
         #[arg(long, conflicts_with = "max")]
         internal_labels: bool,
@@ -483,6 +461,9 @@ enum C {
         path: String,
         /// Counterexamples file
         library: String,
+        /// List only survivors
+        #[arg(long)]
+        survivors: bool,
     },
     /// Grow subgraph-free seed graphs upward, reporting complement coverage
     FreeClose {
@@ -677,9 +658,9 @@ pub fn main() {
                 bits, gr, bits.count_ones(), bits.show_bits(), tools::count_symmetries(&gr),
                 tools::build_sorted_row(&gr));
         }
-        C::Successors { size, path, max, internal_labels } => {
+        C::Successors { size, path, internal_labels } => {
             let pool = tools::read_graphs(size, &path);
-            successors(size, pool, max, internal_labels);
+            successors(size, pool, internal_labels);
         }
         C::IsSubgraph { table, color, graphs } => {
             let (subs, sups) = parse_subgraph_args(graphs).unwrap_or_else(||
@@ -721,12 +702,12 @@ pub fn main() {
             let gr = Graph::from_bits(size, bits);
             free_scan(&gr, tools::read_graphs(size, &path));
         }
-        C::Cull { size, path, library } => {
+        C::Cull { size, path, library, survivors } => {
             note_threads();
             let cands: Vec<BitNum> = tools::read_graphs(size, &path).collect();
             let lib: Vec<BitNum> = tools::read_graphs(size, &library).collect();
             eprintln!("Candidates: {}, library: {}", cands.len(), lib.len());
-            cull(size, cands, &lib);
+            cull(size, cands, &lib, survivors);
         }
         C::FreeClose { size, bits, path } => {
             let gr = Graph::from_bits(size, bits);
