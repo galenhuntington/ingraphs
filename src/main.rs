@@ -284,7 +284,7 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>) {
             }
         }
         if !bads.is_empty() { continue }
-        print!("{},{},{:?}", g.bits(), Graph::from_bits(size, g), bads);
+        println!("{},{},{:?}", g.bits(), Graph::from_bits(size, g), bads);
     }
 }
 

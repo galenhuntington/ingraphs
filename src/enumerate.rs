@@ -217,8 +217,14 @@ pub fn is_best(gr: &Graph) -> bool {
 }
 
 pub fn to_best(gr: &Graph) -> Graph {
-    // eprintln!("is_best({} {} {:b})", gr, gr.edges.0.0, gr.edges.0.0);
-    let mut last = gr.bits();
+    if gr.size <= 1 { return *gr }
+    // Pre-order by degree, especially since Nauty's output is badly out of order,
+    // and doing this helps a lot.
+    let degrees: Vec<_> = (0..gr.size).map(|v| gr.degree_of(v)).collect();
+    let mut order: Vec<_> = (0..gr.size).collect();
+    order.sort_by_key(|&v| std::cmp::Reverse(degrees[v]));
+    let reordered = Graph::from_fn(gr.size, |a, b| gr.has_edge(order[a], order[b]));
+    let mut last = gr.bits().min(reordered.bits());
     // XXX unclear why I need multiple calls
     loop {
         let next: BitNum = new_recurse(last, gr.size - 1, 0, last);
@@ -344,6 +350,22 @@ mod tests {
     use super::*;
     use crate::tools;
     use rand::Rng;
+
+    #[test]
+    fn test_best_with_permuted_isolated_vertices() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let nf = 94u8.into();
+        let mut rng = StdRng::seed_from_u64(20260924);
+        let expected = tools::naive_find_best(&Graph::from_bits(5, nf)).bits();
+        for size in 5..=crate::base::MAX_SIZE {
+            let gr = Graph::from_bits(size, nf);
+            for _ in 0..40 {
+                let p = crate::perm::Perm::random(&mut rng, size);
+                assert_eq!(to_best(&gr.renumber(&p)).bits(), expected);
+            }
+        }
+        assert_eq!(to_best(&Graph::from_bits(0, 0)).bits(), 0);
+    }
 
     #[test]
     fn test_smoosh() {
