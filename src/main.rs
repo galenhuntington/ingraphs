@@ -602,7 +602,7 @@ pub fn main() {
                     let ans = tools::is_subgraph_of(&sub, &sup);
                     print!(" {}{:>width$}{}",
                         if color { if ans { "\x1b[01;32m" } else { "\x1b[01;31m" } } else { "" },
-                        tools::is_subgraph_of(&sub, &sup),
+                        ans,
                         if color { "\x1b[00m" } else { "" },
                         );
                 }
