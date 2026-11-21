@@ -15,7 +15,7 @@ pub mod capabilities;
 use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::{BTreeMap,BTreeSet};
 use matcher::{PreparedColours,PreparedHost,PreparedPattern};
-use clap::{Parser,Subcommand};
+use clap::{Args,Parser,Subcommand};
 use std::time::{Instant,Duration};
 
 fn note_threads() {
@@ -199,15 +199,18 @@ fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum], survivors: boo
         if d % 1000 == 0 { eprint!(" Progress: {}k\r", d / 1000); }
         (g, hit)
     });
-    // Should allow ExactSizeIterator for second case.
-    let results: Vec<_> = if survivors {
-            results.filter(|(_, hit)| hit.is_none()).collect() // XXX size is known
-        } else {
-            results.collect()
-        };
-    for (g, hit) in results {
-        println!("{},{:?}", g, hit); // XXX no hit if survivors?
-    }
+    if survivors {
+        let results: Vec<_> = results.filter_map(|(g, hit)| hit.map(|_| g)).collect(); // XXX size is known
+        for g in results {
+            println!("{}", g);
+        }
+    } else {
+        let results: Vec<_> = results.collect();
+        for (g, hit) in results {
+            println!("{},{:?}", g, hit);
+        }
+    };
+
     eprintln!("\nCandidates: {}, survivors: {}",
         candidates.len(), survived.load(Ordering::Relaxed));
 }
@@ -297,6 +300,17 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>, internal_labels: bo
     }
 }
 
+
+#[derive(Debug, Args)]
+#[group(required = true, multiple = false)]
+struct Library {
+    /// Counterexamples file
+    #[arg(short = 'f', long)]
+    library_file: Option<String>,
+    /// Counterexamples list
+    #[arg(short, long, value_delimiter = ',')]
+    library: Option<Vec<BitNum>>,
+}
 
 #[derive(Debug,Subcommand)]
 enum C {
@@ -424,7 +438,7 @@ enum C {
         /// Graphs file
         path: String,
         /// Keep fast internal canonical labels in output, e.g. for chained successors
-        #[arg(long, conflicts_with = "max")]
+        #[arg(short, long)]
         internal_labels: bool,
     },
     /// Show whether a list of graphs are subgraphs of another list
@@ -459,10 +473,10 @@ enum C {
         size: usize,
         /// Candidates file
         path: String,
-        /// Counterexamples file
-        library: String,
+        #[command(flatten)]
+        lib: Library,
         /// List only survivors
-        #[arg(long)]
+        #[arg(short, long)]
         survivors: bool,
     },
     /// Grow subgraph-free seed graphs upward, reporting complement coverage
@@ -702,10 +716,12 @@ pub fn main() {
             let gr = Graph::from_bits(size, bits);
             free_scan(&gr, tools::read_graphs(size, &path));
         }
-        C::Cull { size, path, library, survivors } => {
+        C::Cull { size, path, lib, survivors } => {
             note_threads();
             let cands: Vec<BitNum> = tools::read_graphs(size, &path).collect();
-            let lib: Vec<BitNum> = tools::read_graphs(size, &library).collect();
+            let lib: Vec<BitNum> = lib.library_file
+                .map_or_else(|| lib.library.unwrap(), |l| tools::read_graphs(size, &l)
+                .collect());
             eprintln!("Candidates: {}, library: {}", cands.len(), lib.len());
             cull(size, cands, &lib, survivors);
         }

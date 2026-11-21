@@ -4,7 +4,7 @@
 Examples:
   python3 scripts/refuter_variants.py 14 seeds.txt --mode flips --distance 2
   python3 scripts/refuter_variants.py 14 seeds.txt --mode switch --graph6 \
-    | labelg -q | sort -u | graphy cull 14 output/batches/all14 /dev/stdin
+    | labelg -q | sort -u | graphy cull 14 output/batches/all14 -f /dev/stdin
 
 Output has one representative of each *labelled* complement pair. For fast
 isomorphism deduplication, use --graph6 and nauty's labelg as above. Its labels
