@@ -263,26 +263,20 @@ fn miss_counts(gr: &Graph) -> (usize, usize, u128) {
     counts
 }
 
-fn successors(size: usize, pool: impl Iterator<Item=BitNum>, max: BitNum) {
+fn successors(size: usize, pool: impl Iterator<Item=BitNum>) {
     let pool: BTreeSet<_> = pool.collect();
     let extends: BTreeSet<_> = pool.iter().flat_map(|g| tools::bump(
             &Graph::from_bits(size, *g), true)).collect();
     for g in extends {
         let rets = tools::bump(&Graph::from_bits(size, g), false);
-        let mut highs = Vec::new();
         let mut bads = Vec::new();
         for g1 in rets.iter() {
-            if *g1 > max {
-                highs.push(*g1);
-                continue;
-            }
             if !pool.contains(g1) {
                 bads.push(g1);
             }
         }
         if !bads.is_empty() { continue }
-        print!("{},{},{:?},", g.bits(), Graph::from_bits(size, g), bads);
-        show_iter(highs.iter().cloned());
+        print!("{},{},{:?}", g.bits(), Graph::from_bits(size, g), bads);
     }
 }
 
@@ -395,9 +389,9 @@ enum C {
         size: usize,
         /// Graphs file
         path: String,
-        /// Maximum scanned
-        #[arg(long)]
-        max: Option<BitNum>,
+        /// Dummy argument for compatibility with Nauty FFI branch.
+        #[arg(short, long)]
+        internal_labels: bool,
     },
     /// Show whether a list of graphs are subgraphs of another list
     IsSubgraph {
@@ -571,9 +565,9 @@ pub fn main() {
                 bits, gr, bits.count_ones(), bits.show_bits(), tools::count_symmetries(&gr),
                 tools::build_sorted_row(&gr));
         }
-        C::Successors { size, path, max } => {
+        C::Successors { size, path, internal_labels: _ } => {
             let pool = tools::read_graphs(size, &path);
-            successors(size, pool, max.unwrap_or(BitNum::MAX));
+            successors(size, pool);
         }
         C::IsSubgraph { table, color, graphs } => {
             let (subs, sups) = parse_subgraph_args(graphs).unwrap_or_else(||
