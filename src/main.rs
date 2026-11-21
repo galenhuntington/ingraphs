@@ -8,7 +8,7 @@ pub mod progress;
 
 use base::{Graph,BitNum,Bits,MAX_SIZE};
 use std::collections::BTreeSet;
-use clap::{Parser,Subcommand};
+use clap::{Args,Parser,Subcommand};
 use std::time::{Instant,Duration};
 
 fn note_threads() {
@@ -159,16 +159,16 @@ fn ingraph_check(sub: &Graph, list: impl Iterator<Item=Graph> + Send) -> Option<
 
 // Test each candidate ingraph against a shared library of counterexamples;
 // a library graph H refutes candidate G if G embeds in neither H nor its
-// complement.  Prints candidate,refuter (or None for survivors).
-// Multithreaded but otherwise often much slower than ingraph-seek, and doesn't stream.
-fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
+// complement.  Prints candidate,refuter (or None for survivors), or just survivors.
+// Uses provided ordering (constrasted with ingraph-seek's dynamic duration ordering).
+fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum], survivors: bool) {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicU64,Ordering};
     let library: Vec<Graph> = library.iter()
         .map(|&h| Graph::from_bits(size, h)).collect();
     let progress = AtomicU64::new(0);
     let survived = AtomicU64::new(0);
-    let results: Vec<_> = candidates.par_iter().map(|&g| {
+    let results = candidates.par_iter().map(|&g| {
         let gr = Graph::from_bits(size, g);
         let sorted = tools::build_sorted_row(&gr);
         let hit = library.iter()
@@ -178,10 +178,18 @@ fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum]) {
         if hit.is_none() { survived.fetch_add(1, Ordering::Relaxed); }
         if d % 1000 == 0 { eprint!(" Progress: {}k\r", d / 1000); }
         (g, hit)
-    }).collect();
-    for (g, hit) in results {
-        println!("{},{:?}", g, hit);
-    }
+    });
+    if survivors {
+        let results: Vec<_> = results.filter_map(|(g, hit)| hit.map(|_| g)).collect(); // XXX size is known
+        for g in results {
+            println!("{}", g);
+        }
+    } else {
+        let results: Vec<_> = results.collect();
+        for (g, hit) in results {
+            println!("{},{:?}", g, hit);
+        }
+    };
     eprintln!("\nCandidates: {}, survivors: {}",
         candidates.len(), survived.load(Ordering::Relaxed));
 }
@@ -280,6 +288,17 @@ fn successors(size: usize, pool: impl Iterator<Item=BitNum>) {
     }
 }
 
+
+#[derive(Debug, Args)]
+#[group(required = true, multiple = false)]
+struct Library {
+    /// Counterexamples file
+    #[arg(short = 'f', long)]
+    library_file: Option<String>,
+    /// Counterexamples list
+    #[arg(short, long, value_delimiter = ',')]
+    library: Option<Vec<BitNum>>,
+}
 
 #[derive(Debug,Subcommand)]
 enum C {
@@ -425,8 +444,11 @@ enum C {
         size: usize,
         /// Candidates file
         path: String,
-        /// Counterexamples file
-        library: String,
+        #[command(flatten)]
+        lib: Library,
+        /// List only survivors
+        #[arg(short, long)]
+        survivors: bool,
     },
     /// Grow subgraph-free seed graphs upward, reporting complement coverage
     FreeClose {
@@ -612,12 +634,14 @@ pub fn main() {
             let gr = Graph::from_bits(size, bits);
             free_scan(&gr, tools::read_graphs(size, &path));
         }
-        C::Cull { size, path, library } => {
+        C::Cull { size, path, lib, survivors } => {
             note_threads();
             let cands: Vec<BitNum> = tools::read_graphs(size, &path).collect();
-            let lib: Vec<BitNum> = tools::read_graphs(size, &library).collect();
+            let lib: Vec<BitNum> = lib.library_file
+                .map_or_else(|| lib.library.unwrap(), |l| tools::read_graphs(size, &l)
+                .collect());
             eprintln!("Candidates: {}, library: {}", cands.len(), lib.len());
-            cull(size, cands, &lib);
+            cull(size, cands, &lib, survivors);
         }
         C::FreeClose { size, bits, path } => {
             let gr = Graph::from_bits(size, bits);
