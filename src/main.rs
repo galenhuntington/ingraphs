@@ -200,7 +200,9 @@ fn cull(size: usize, candidates: Vec<BitNum>, library: &[BitNum], survivors: boo
         (g, hit)
     });
     if survivors {
-        let results: Vec<_> = results.filter_map(|(g, hit)| hit.map(|_| g)).collect(); // XXX size is known
+        let results: Vec<_> = results
+            .filter(|(_, hit)| hit.is_none()).map(|(g, _)| g)
+            .collect(); // XXX size is known
         for g in results {
             println!("{}", g);
         }
